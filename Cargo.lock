@@ -465,6 +465,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rit-protocol"
+version = "0.1.0-dev.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "rit-storage"
 version = "0.1.0-dev.1"
 dependencies = [

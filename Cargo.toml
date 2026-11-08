@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rit-core", "crates/rit-cli", "crates/rit-git", "crates/rit-storage", "crates/rit-application"]
+members = ["crates/rit-core", "crates/rit-cli", "crates/rit-git", "crates/rit-storage", "crates/rit-application", "crates/rit-protocol"]
 resolver = "2"
 
 [workspace.package]
