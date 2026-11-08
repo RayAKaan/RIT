@@ -20,6 +20,15 @@ pub enum ApplicationError {
     /// Repository source analysis failed.
     #[error(transparent)]
     Analysis(#[from] rit_analysis::AnalysisError),
+    /// Candidate exists but required integrity validation failed; inspect it before recovery.
+    #[error(
+        "candidate {id} was created but Git integrity validation failed: {source}; inspect with integration inspect, do not retry blindly"
+    )]
+    CandidateCreatedValidationFailed {
+        id: String,
+        #[source]
+        source: GitError,
+    },
     /// Repository was not registered.
     #[error("repository is not registered; use rit repository register")]
     NotRegistered,

@@ -1707,6 +1707,29 @@ fn submission_builds_real_detached_candidate_without_publishing_and_reconciles_s
             .unwrap()
             .starts_with("NOT_RUN")
     );
+    // Fail the required fsck through a Git wrapper, not a fabricated result.
+    let wrapper = d.path().join("git-fail-fsck");
+    std::fs::write(&wrapper,"#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = fsck ]; then exit 42; fi; done\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let failed = run(
+        &[
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "integration",
+            "validate",
+            cid,
+            "--repo",
+            rp,
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!failed.status.success());
+    assert!(
+        text(&failed.stderr).contains("candidate fsck"),
+        "{}",
+        text(&failed.stderr)
+    );
     let commit = result["candidate"]["candidate"]["commit"]["hex"]
         .as_str()
         .unwrap();
@@ -1727,6 +1750,13 @@ fn submission_builds_real_detached_candidate_without_publishing_and_reconciles_s
     git(&repo, &["commit", "--allow-empty", "-qm", "move target"]);
     let candidates = cli(&["submission", "candidates", "--repo", rp, "--json"]);
     assert_eq!(candidates["candidates"][0]["target_moved"], true);
+    let stale_validation = run(
+        &["integration", "validate", cid, "--repo", rp, "--json"],
+        &[],
+    );
+    assert!(!stale_validation.status.success());
+    assert!(text(&stale_validation.stderr).contains("target moved"));
+
     let stale = run(
         &[
             "submission",
@@ -3270,4 +3300,104 @@ fn checkpoint_custom_budgets_capture_verify_and_restore_large_file_without_overw
         std::fs::read_to_string(work.join("file")).unwrap(),
         "newer original\n"
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn failed_post_creation_integrity_check_reports_partial_candidate_without_deleting_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        text(&o.stdout).trim().to_string()
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("base"), "base\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let target = git(&repo, &["rev-parse", "HEAD"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("source");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "source",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("new"), "feature\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "feature"]);
+    let source = git(&work, &["rev-parse", "HEAD"]);
+    let sub = cli(&[
+        "submit",
+        "--workspace",
+        wid,
+        "--repo",
+        rp,
+        "--target",
+        "refs/heads/main",
+        "--json",
+    ]);
+    let sid = sub["receipt"]["submission"]["id"].as_str().unwrap();
+    let wrapper = d.path().join("git-fail-fsck");
+    std::fs::write(&wrapper,"#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = fsck ]; then exit 42; fi; done\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let dest = d.path().join("candidate");
+    let failed = run(
+        &[
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "submission",
+            "candidate",
+            sid,
+            "--repo",
+            rp,
+            "--path",
+            dest.to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!failed.status.success());
+    let message = text(&failed.stderr);
+    assert!(
+        message.contains("was created but Git integrity validation failed"),
+        "{message}"
+    );
+    assert!(message.contains("do not retry blindly"));
+    let candidates = cli(&["integration", "list", "--repo", rp, "--json"]);
+    let entries = candidates["candidates"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    let id = entries[0]["candidate"]["id"].as_str().unwrap();
+    assert!(message.contains(id));
+    assert_eq!(entries[0]["observation"], "present");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("new")).unwrap(),
+        "feature\n"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), target);
+    assert_eq!(git(&work, &["rev-parse", "HEAD"]), source);
 }

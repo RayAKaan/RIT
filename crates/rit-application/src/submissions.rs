@@ -177,13 +177,15 @@ impl SubmissionService {
             )
             .into());
         }
-        let object_check = match self
-            .git
-            .candidate_verify_objects(repo, &candidate.candidate.commit)
-        {
-            Ok(()) => "passed (Git fsck; auxiliary indexes excluded)".into(),
-            Err(e) => format!("unavailable or failed: {e}"),
-        };
+        if candidate.target_moved {
+            return Err(rit_git::GitError::Unavailable(
+                "candidate target moved or cannot be verified; construct a fresh candidate",
+            )
+            .into());
+        }
+        self.git
+            .candidate_verify_objects(repo, &candidate.candidate.commit)?;
+        let object_check = "passed (Git fsck; auxiliary indexes excluded)".into();
         let graph = GitReadService::new(self.git.clone())
             .dependencies_revision(repo, candidate.candidate.commit.as_hex());
         let (dependency_analysis, dependency_error) = match graph {
@@ -230,13 +232,15 @@ impl SubmissionService {
             Ok(v) => (Some(Box::new(v)), None),
             Err(e) => (None, Some(e.to_string())),
         };
-        let object_check = match self
-            .git
+        self.git
             .candidate_verify_objects(repo, &candidate.candidate.commit)
-        {
-            Ok(()) => "passed (Git fsck; auxiliary indexes excluded)".into(),
-            Err(e) => format!("unavailable or failed: {e}"),
-        };
+            .map_err(
+                |source| ApplicationError::CandidateCreatedValidationFailed {
+                    id: candidate.candidate.id.to_string(),
+                    source,
+                },
+            )?;
+        let object_check = "passed (Git fsck; auxiliary indexes excluded)".into();
         Ok(CandidateResult::Created {
             candidate: Box::new(candidate),
             conflict_report: report,
