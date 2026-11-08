@@ -8,6 +8,8 @@
 pub mod activity;
 /// Checkpoint metadata and preview.
 pub mod checkpoint;
+/// Task and review domain types.
+pub mod collaboration;
 pub mod config;
 /// Read-only conflict evidence.
 pub mod conflict;

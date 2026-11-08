@@ -62,6 +62,11 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Task and review operations (currently unavailable).
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     /// Submission and integration operations (currently unavailable).
     Submission {
         #[command(subcommand)]
@@ -272,4 +277,16 @@ pub enum SubmissionCommand {
     Preview { id: String },
     /// Publish a validated candidate; disabled.
     Publish { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    /// Create a task; disabled.
+    Create { repository: String },
+    /// List tasks; disabled.
+    List,
+    /// Inspect a task; disabled.
+    Status { id: String },
+    /// Record a review; disabled.
+    Review { submission: String },
 }

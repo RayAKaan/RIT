@@ -162,3 +162,18 @@ pub trait DependencyExtractor {
         workspace: rit_core::workspace::WorkspaceId,
     ) -> Result<rit_core::impact::DependencyGraph, CapabilityError>;
 }
+/// Collaboration persistence boundary, not yet implemented.
+pub trait CollaborationProvider {
+    /// Read task metadata after authorization.
+    fn task(
+        &self,
+        actor: &ActorContext,
+        id: rit_core::collaboration::TaskId,
+    ) -> Result<rit_core::collaboration::Task, CapabilityError>;
+    /// Record an authenticated, candidate-bound review after authorization.
+    fn review(
+        &mut self,
+        actor: &ActorContext,
+        review: &rit_core::collaboration::Review,
+    ) -> Result<(), CapabilityError>;
+}

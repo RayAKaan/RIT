@@ -1,0 +1,3 @@
+# Phase 11 — collaboration/reliability foundations
+
+Task and participant models link repositories and workspaces; task transitions reject skipping review and terminal-state reversal. Review metadata connects to submissions and explicitly does not confer authority. Provider contracts and task CLI are disabled. No collaboration service, durable review/approval, approval separation, authenticated recovery, backup implementation, full failure-injection or concurrency harness, or reproducible benchmark versus Git baseline has been delivered; no reliability or performance claims are made. Existing Phase 2 fault tests are preserved.
