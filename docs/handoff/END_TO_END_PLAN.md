@@ -1,30 +1,46 @@
-# 26-step end-to-end acceptance plan (not executed)
+# 40-step v2 end-to-end acceptance scenario — NOT RUN
 
-All steps must run against disposable repositories with independent identities and credentials, verified isolation, authenticated policy, safe storage, and explicit evidence for every result. The present implementation cannot execute this scenario.
+All steps require disposable repositories, real providers, validated security and preserved evidence. No mocked result substitutes for production acceptance.
 
-1. Create disposable Git repository and initial commit.
-2. Initialize a protected RIT registry after security gates pass.
-3. Bootstrap the first administrator securely.
-4. Create two human principals and an agent principal.
-5. Issue short-lived credentials via secure files.
-6. Assign least-privilege repository-scoped roles.
-7. Verify deny/default-deny and invalid credentials.
-8. Register the Git repository without mutating history.
-9. Create a task with authorized participants.
-10. Create isolated workspaces for both participants.
-11. Validate OS sandbox and resource limits for agent execution.
-12. Make independent changes in both workspaces.
-13. Reconcile observed Git changes, staged changes and commits.
-14. Create and verify complete checkpoints.
-15. Verify partial restore preview and newer-work conflict detection.
-16. Safely restore a selected file in disposable workspace.
-17. Create two submissions bound to source/base/target.
-18. Queue first submission and prepare candidate.
-19. Run candidate validation and bind results to commit.
-20. Obtain independent, authorized candidate-bound review.
-21. Publish using target compare-and-swap; preserve source branch.
-22. Observe target movement and rebase/reprepare second candidate.
-23. Detect conflicts and request human semantic review without overwriting.
-24. Analyze evidenced partial impact and recommended tests.
-25. Exercise authenticated CLI/MCP and Rust/TypeScript/Python SDK interoperability, including denial paths.
-26. Inject process death and concurrent changes; verify audit, backup, recovery, cleanup and Git-baseline results across native supported platforms.
+1. Initialize RIT.
+2. Register the repository.
+3. Inspect repository health.
+4. Bootstrap owner identity.
+5. Create five agent identities.
+6. Assign different scoped permissions.
+7. Create five workspaces.
+8. Verify independent branches.
+9. Assign tasks.
+10. Assign task dependencies.
+11. Connect or launch supported external agents.
+12. Observe real agent activity.
+13. Create checkpoints.
+14. Modify overlapping files.
+15. Detect overlaps.
+16. Create submissions.
+17. Build candidate integrations.
+18. Detect textual conflicts.
+19. Inspect structural conflicts.
+20. Generate impact reports.
+21. Recommend relevant tests.
+22. Run validation.
+23. Reject a submission whose tests fail.
+24. Verify source work is preserved.
+25. Correct the failing submission.
+26. Resubmit.
+27. Request human approval.
+28. Publish safely.
+29. Verify target branch.
+30. Verify source branches.
+31. Verify Git history.
+32. Interrupt an operation.
+33. Restart RIT.
+34. Recover or reconcile the interrupted operation.
+35. Verify audit records.
+36. Verify API and MCP access.
+37. Verify standard Git commands still work.
+38. Verify repository integrity.
+39. Verify workspace cleanup.
+40. Verify no user work was lost.
+
+Separate isolated tests for Git snapshots and five test-created worktrees do not constitute execution of these 40 steps.

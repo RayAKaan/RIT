@@ -1,0 +1,5 @@
+# Security model — blocked development state
+
+See `security/storage-threat-model.md` for the complete existing storage threat model and `handoff/deferred-work.yaml` for stable blockers. Phase 2.1 is failed, not an accepted risk. Existing experimental registry and adoption operations are unauthenticated and do not prove exact database identity. Do not use on valuable data. The pure role evaluator and audit hash-chain code do not authenticate callers or implement durable policy/audit. An unanchored chain cannot detect whole-chain replacement or suffix truncation.
+
+New privileged identity, task, workspace, process, restore and publication commands fail closed. Worktrees and RIT identities do not enforce OS filesystem/process isolation. There is no hardened execution provider. An independently protected audit anchor and native Linux/macOS/Windows security validation are prerequisites, not delivered capabilities. Root/administrator, kernel and unrestricted same-OS-identity attackers are outside the stated boundary; application permissions do not control ordinary Git users.

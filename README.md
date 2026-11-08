@@ -4,7 +4,7 @@ RIT is a planned local-first coordination layer for humans and AI agents working
 
 ## Status
 
-Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and experimental SQLite-backed repository registration, without authentication or authorization. Avoid valuable data: the storage gate is failing. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, checkpoints, integration and collaboration have **models and disabled CLI/provider scaffolding only**; sandboxing and privileged operations are not implemented. A minimal MCP discovery-only stdio server and transport-injected SDK foundations exist. This is not a production release.
+Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and experimental SQLite-backed repository registration, without authentication or authorization. Avoid valuable data: the storage gate is failing. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, checkpoints, integration and collaboration have **models and disabled CLI/provider scaffolding only**; sandboxing and privileged operations are not implemented. A minimal MCP discovery-only stdio server, transport-injected SDK foundations, bounded Git history/ref reads, and Tree-sitter static-import extraction over supplied source exist. This is not a production release.
 
 ## Build and run
 
@@ -54,3 +54,7 @@ cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data status REPOSI
 ```
 
 `rit init` registers an **existing** Git repository; it never runs `git init`. Git executable override: `--git-executable` then `RIT_GIT_EXECUTABLE`; data directory override: `--data-dir` then `RIT_DATA_DIR`. Only Unicode paths are currently supported for persistence and status. JSON doctor is now schema version 2: the Phase 1 fields remain and `git` and `storage` were added. Other JSON output uses schema version 1. Git 2.29+ is a provisional requirement; only Git 2.47.3/Linux has been tested. See [Phase 2 report](docs/phases/phase-02-report.md) before relying on any behavior.
+
+## Additional read-only Git commands
+
+`rit repo branches PATH --json`, `rit repo refs PATH --json` and `rit repo log PATH --limit 20 --json` read Git directly without opening the registry. They use local OS-user permissions, not RIT authentication, and their observations can be stale. See `docs/CLI_REFERENCE.md`.

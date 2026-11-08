@@ -1,0 +1,3 @@
+# Development guide
+
+Use the pinned toolchain, then `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`, `cargo test --locked --workspace --all-targets --no-fail-fast`, and locked debug/release builds. The two Phase 2.1 acceptance tests are expected to fail and must remain required. Use disposable Git repositories and registries, not actual user data. See `RIT_TEST_STRATEGY.md` and `handoff/FULL_IMPLEMENTATION_GAP_AUDIT.md`. The analysis crate includes pinned Tree-sitter grammars; building them requires a working C toolchain. SDK test commands are documented in the Phase 10 report.

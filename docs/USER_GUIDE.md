@@ -1,0 +1,7 @@
+# RIT user guide — development preview
+
+RIT is not production-ready. Do not rely on the experimental registry for valuable data: hot-journal recovery and substituted-database acceptance tests fail, and the existing registry commands do not authenticate callers. In particular, legacy adoption does not implement verified backup or crash-safe intent. Never delete SQLite journals as a workaround.
+
+Install the pinned Rust toolchain and Git, then `cargo build --locked --workspace`. Use `rit doctor --json` and `rit config validate` for diagnostics. `rit inspect PATH --json` inspects Git without opening the registry. `rit repo branches PATH --json`, `rit repo refs PATH --json`, and `rit repo log PATH --limit 20 --json` read Git history/ref observations without registry access. These commands are local OS-user reads, not authenticated RIT services; use only with repositories you are authorized to inspect. Git data can change concurrently and results can be stale or incomplete, particularly in shallow clones.
+
+The `identity`, `permission`, `policy`, `audit`, `workspace`, `agent`, `task`, `checkpoint` and `submission` command families explicitly fail unavailable. The protocol server exposes only discovery and denies every tool call. Worktree separation is not OS isolation. Full task/workspace/checkpoint/integration workflows, backed-up restore, authenticated APIs and release support are not available.
