@@ -7,12 +7,12 @@ The owner authorized safe structural continuation despite the unresolved Phase 2
 | 1 | Foundation | Local implementation; remote acceptance pending |
 | 2 / 2.1 | Git adapter, repository registry and storage security | Functionality partial; two critical required tests fail; security not accepted |
 | 3 | Identity, permissions, audit | Pure models and disabled CLI scaffolding; authentication/persistence absent |
-| 4 | Workspace and isolation | Not yet implemented |
-| 5 | Activity awareness | Not yet implemented |
-| 6 | Checkpoints | Not yet implemented |
-| 7 | Transactional integration | Not yet implemented |
-| 8 | Conflict intelligence | Not yet implemented |
-| 9 | Impact intelligence | Not yet implemented |
-| 10 | MCP, API, SDK | Not yet implemented |
-| 11 | Collaboration, reliability | Not yet implemented |
-| 12 | Release structure | Not yet implemented |
+| 4 | Workspace and isolation | Structural foundations only; no security or release verification |
+| 5 | Activity awareness | Structural foundations only; no security or release verification |
+| 6 | Checkpoints | Structural foundations only; no security or release verification |
+| 7 | Transactional integration | Structural foundations only; no security or release verification |
+| 8 | Conflict intelligence | Structural foundations only; no security or release verification |
+| 9 | Impact intelligence | Structural foundations only; no security or release verification |
+| 10 | MCP, API, SDK | Structural foundations only; no security or release verification |
+| 11 | Collaboration, reliability | Structural foundations only; no security or release verification |
+| 12 | Release structure | Documentation, local validation and handoff; no release verification |

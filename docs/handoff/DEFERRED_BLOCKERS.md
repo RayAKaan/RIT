@@ -1,17 +1,29 @@
 # Deferred blockers
 
-Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED; no blocker is an accepted risk. Existing Phase 2 CLI operations are not authenticated and the existing adoption path is incomplete.
+Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED; no blocker is an accepted risk. Existing Phase 2 registry operations are unauthenticated; adoption and recovery are incomplete.
 
-| ID | Severity | Title | Evidence |
-|---|---|---|---|
-| RIT-SEC-001 | critical | Hot journal recovery | Real SIGKILL hot-journal test fails RecoveryBlocked |
-| RIT-SEC-002 | critical | Database substitution and file identity | refuses_replaced_marked_database_even_if_schema_and_application_id_match fails; ext4 reused device/inode |
-| RIT-SEC-003 | critical | Protected manifest/state machine | docs/RIT_DECISIONS.md describes only an unapproved proposal |
-| RIT-SEC-004 | critical | macOS storage backend | Non-Linux storage fails closed |
-| RIT-SEC-005 | critical | Windows storage backend | Non-Linux storage fails closed |
-| RIT-SEC-006 | high | Legacy adoption | Existing adoption has no durable intent or automatic consistent backup |
-| RIT-SEC-007 | high | Independent security review | No independent review performed |
-| RIT-SEC-008 | high | Linux adversarial validation | Current handle/path boundary is experimental |
-| RIT-OPS-001 | medium | Remote authentication | Phase 1 dry-run push failed with missing GitHub credentials |
-| RIT-SEC-009 | critical | Production identity and authorization unavailable | Pure policy types exist; no production authenticator or service enforcement |
-| RIT-SEC-010 | high | Existing Phase 2 repository operations are unauthenticated | rit-application Repositories and CLI registry operations predate Phase 3 |
+| ID | Severity | Component | Title | Evidence |
+|---|---|---|---|---|
+| RIT-SEC-001 | critical | rit-storage | Hot journal recovery | Real SIGKILL hot-journal test fails RecoveryBlocked |
+| RIT-SEC-002 | critical | rit-storage | Database substitution and file identity | refuses_replaced_marked_database_even_if_schema_and_application_id_match fails; ext4 reused device/inode |
+| RIT-SEC-003 | critical | rit-storage | Protected manifest/state machine | docs/RIT_DECISIONS.md describes only an unapproved proposal |
+| RIT-SEC-004 | critical | rit-storage | macOS storage backend | Non-Linux storage fails closed |
+| RIT-SEC-005 | critical | rit-storage | Windows storage backend | Non-Linux storage fails closed |
+| RIT-SEC-006 | high | rit-storage | Legacy adoption | Existing adoption has no durable intent or automatic consistent backup |
+| RIT-SEC-007 | high | storage security | Independent security review | No independent review performed |
+| RIT-SEC-008 | high | Linux storage | Linux adversarial validation | Current handle/path boundary is experimental |
+| RIT-OPS-001 | medium | delivery | Remote authentication | Phase 1 dry-run push failed with missing GitHub credentials |
+| RIT-SEC-009 | critical | identity and authorization | Production identity and authorization unavailable | Pure policy types exist; no production authenticator or service enforcement |
+| RIT-SEC-010 | high | existing repository commands | Existing Phase 2 repository operations are unauthenticated | rit-application Repositories and CLI registry operations predate Phase 3 |
+| RIT-P04-001 | critical | workspace/isolation | Validated workspace operations and OS isolation | Only models, interfaces and blocked CLI exist |
+| RIT-P05-001 | medium | activity | Activity source and reconciliation | Pure snapshot comparison only; no watcher/routing |
+| RIT-P06-001 | critical | checkpoint | Safe capture, restore and retention | Metadata and non-executable preview only |
+| RIT-P07-001 | critical | integration | Queue and atomic ref publication | Only advisory pure preview and contracts |
+| RIT-P08-001 | medium | conflict | Semantic conflict analysis | Only native status evidence and semantic adapter types |
+| RIT-P09-001 | medium | impact | Evidence extraction and impact coverage | Traversal only over caller-supplied partial edges |
+| RIT-P10-001 | critical | protocol | Authenticated privileged tool routes | Discovery-only stdio; all tool calls denied |
+| RIT-P11-001 | high | collaboration/reliability | Persistent collaboration and reliability suite | Task/review data types only; no durable services or benchmarks |
+| RIT-P12-001 | high | release | Native support and release verification | Linux build only; remote CI and native macOS/Windows unknown |
+| RIT-P10-002 | medium | typescript sdk | TypeScript validation and interoperability | TypeScript compiler unavailable in current environment |
+| RIT-P03-001 | high | audit/authentication | Actor construction and audit anchoring | ActorContext has no external construction path; chain cannot detect tail truncation or full rewrite |
+| RIT-OPS-002 | medium | handoff history | Full-history export contains temporary bytecode and environment paths | Phase 10 accidentally committed generated Python bytecode containing a machine-specific path; removed in next commit. Historical reports also contain paths. |

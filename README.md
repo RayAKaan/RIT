@@ -4,7 +4,7 @@ RIT is a planned local-first coordination layer for humans and AI agents working
 
 ## Status
 
-Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and SQLite-backed repository registration. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, sandboxing, checkpoints, integration, analysis, MCP and SDKs are **not implemented**. This is not a production release.
+Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and experimental SQLite-backed repository registration, without authentication or authorization. Avoid valuable data: the storage gate is failing. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, checkpoints, integration and collaboration have **models and disabled CLI/provider scaffolding only**; sandboxing and privileged operations are not implemented. A minimal MCP discovery-only stdio server and transport-injected SDK foundations exist. This is not a production release.
 
 ## Build and run
 
@@ -19,6 +19,8 @@ cargo run --locked -p rit-cli -- doctor --json
 cargo run --locked -p rit-cli -- config validate
 cargo test --locked --workspace --all-targets
 ```
+
+The workspace test suite currently fails two mandatory Phase 2.1 security tests; see [status](docs/RIT_STATUS.md).
 
 `cargo build` produces `target/debug/rit` (Windows: `target\debug\rit.exe`). No global install is required.
 
@@ -38,7 +40,9 @@ Configuration has no secret fields. Do not place credentials in it. Logs go to s
 
 `rit-cli` composes `rit-application`, `rit-git`, `rit-storage`, and `rit-core`; core has no CLI, Git, SQLite, or global logging dependency. [Architecture](docs/architecture/overview.md), [component map](docs/architecture/component-map.md), [testing](docs/development/testing.md), and [decisions](docs/architecture/decisions/0001-foundation.md) describe the current boundaries. Future phases address security, workspaces, awareness, recovery, integration, analysis, interfaces and release; none is implied by this foundation.
 
-## Phase 2 development commands
+## Phase 2 experimental development commands
+
+**Warning:** registry commands are unauthenticated and the storage security gate fails. Use disposable data only; do not use the legacy adoption path on valuable data.
 
 ```sh
 cargo run --locked -p rit-cli -- doctor --json

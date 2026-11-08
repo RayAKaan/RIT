@@ -2,7 +2,7 @@
 
 | ID | Severity | Risk | Current response / disposition |
 |---|---|---|---|
-| ST-01 | Critical | Hot rollback journal requires writable SQLite recovery before the read-only identity check can succeed. | Required real-process test fails `RecoveryBlocked`; preserve DB and journal, no Phase 3. |
+| ST-01 | Critical | Hot rollback journal requires writable SQLite recovery before the read-only identity check can succeed. | Required real-process test fails `RecoveryBlocked`; preserve DB and journal; later scaffolding is owner-authorized but no security gate is passed. |
 | ST-02 | Critical | Different DB with same application marker and schema is accepted as the original registry. | Required substitution test fails. Independent durable file binding not implemented. |
 | ST-03 | Critical | Device/inode or Windows file ID reuse may make a stale manifest identify a replacement file. | Actual ext4 same-device/inode reuse reproduced on the next file creation. Reject device/inode-only recovery design; platform identity proof unresolved. |
 | ST-04 | Critical | No real macOS ACL/ancestry or Windows DACL/reparse/file-identity backend. | Registry access fails closed on non-Linux; implementation and native validation pending. |
@@ -13,3 +13,5 @@
 | ST-09 | Medium | Git overlap checks and process-group termination are not race-proof or isolation. | Preserve Git independence; document limitations, add tests before phase completion. |
 
 Do not delete SQLite journal/WAL files or copy a live database to work around ST-01. Restore/backup operations need SQLite-consistent procedures.
+
+Later-phase blockers are tracked with acceptance criteria in `handoff/deferred-work.yaml`; the old ST IDs remain historical cross-references.

@@ -17,3 +17,7 @@ Run real Git repositories and SQLite databases in disposable directories; do not
 | Same UID/administrator/kernel attacker | Explicitly outside application-only permission boundary | Documented, not claimed protected. |
 
 Required future tests include failure injection at every durable manifest/SQLite/backup transition; malformed and rolled-back manifests; exact file identity mismatch and ID reuse; genuinely different UID/SID path replacement; SQLite hot rollback and WAL as applicable; lock timeout/process death; native Linux/macOS/Windows security tests and CI. Repetition alone is not proof of race freedom. Never raw-copy an open SQLite DB or remove a hot journal to make a test pass.
+
+## Later-phase foundations
+
+Unit tests exercise pure state transitions, source-bound activity comparison, non-executable restore/integration previews, conflict evidence, graph traversal and stale revision labeling. `rit-protocol` has a real stdio subprocess denial test; the Python SDK has a stdio interoperability test. These do not prove storage, isolation, authorization or end-to-end safety. The 26-step future acceptance scenario is in `handoff/END_TO_END_PLAN.md`; it has not been executed.

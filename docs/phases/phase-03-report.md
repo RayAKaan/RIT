@@ -1,4 +1,6 @@
-# Phase 3 report — BLOCKED at the Phase 2 transition gate
+# Phase 3 report — historical stop, then structural continuation
+
+> Sections 1–17 below record a prior stop decision and describe the state at that time. The owner later authorized fail-closed structural continuation; see the final section. The security gate remains blocked.
 
 Date: 2026-11-08. This is a stop report, not an acceptance report. No Phase 3 branch, identity schema, authentication, permission enforcement or audit implementation was created. Phase 1 and Phase 2 remain unaccepted and unmerged. No Phase 4 work was performed.
 

@@ -32,7 +32,8 @@ fn help_and_version() {
         assert!(out.status.success());
         let s = text(&out.stdout);
         assert!(s.contains("doctor") && s.contains("config") && s.contains("Examples:"));
-        assert!(!s.contains("checkpoint"));
+        assert!(s.contains("checkpoint"));
+        assert!(s.contains("currently unavailable"));
     }
     let out = run(&["--version"], &[]);
     assert!(out.status.success());
@@ -142,6 +143,11 @@ fn security_scaffolding_fails_closed_without_touching_storage() {
     let data = d.path().join("data");
     for args in [
         &["identity", "bootstrap"][..],
+        &["workspace", "create", "repo"],
+        &["agent", "run", "workspace"],
+        &["checkpoint", "restore", "checkpoint"],
+        &["submission", "publish", "submission"],
+        &["task", "review", "submission"],
         &["whoami"],
         &["permission", "roles"],
         &["audit", "verify"],

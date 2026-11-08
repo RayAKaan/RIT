@@ -201,6 +201,245 @@
       "files": [
         "crates/rit-application/src/lib.rs"
       ]
+    },
+    {
+      "id": "RIT-P04-001",
+      "phase": "4",
+      "component": "workspace/isolation",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Validated workspace operations and OS isolation",
+      "evidence": "Only models, interfaces and blocked CLI exist",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits",
+      "acceptance_criteria": "Native isolation escape/resource/cleanup tests",
+      "verification": "Native isolation escape/resource/cleanup tests",
+      "files": [
+        "docs/phases/phase-4-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P05-001",
+      "phase": "5",
+      "component": "activity",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Activity source and reconciliation",
+      "evidence": "Pure snapshot comparison only; no watcher/routing",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation",
+      "acceptance_criteria": "Real Git changes, restart and event-loss tests",
+      "verification": "Real Git changes, restart and event-loss tests",
+      "files": [
+        "docs/phases/phase-5-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P06-001",
+      "phase": "6",
+      "component": "checkpoint",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Safe capture, restore and retention",
+      "evidence": "Metadata and non-executable preview only",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-001"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies",
+      "acceptance_criteria": "Disposable Git integration, crash, conflict and special-file tests",
+      "verification": "Disposable Git integration, crash, conflict and special-file tests",
+      "files": [
+        "docs/phases/phase-6-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P07-001",
+      "phase": "7",
+      "component": "integration",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Queue and atomic ref publication",
+      "evidence": "Only advisory pure preview and contracts",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation",
+      "acceptance_criteria": "Concurrent target changes, retries, source preservation and failure injection",
+      "verification": "Concurrent target changes, retries, source preservation and failure injection",
+      "files": [
+        "docs/phases/phase-7-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P08-001",
+      "phase": "8",
+      "component": "conflict",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Semantic conflict analysis",
+      "evidence": "Only native status evidence and semantic adapter types",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement tested tree-sitter/Mergiraf adapters, text conflict analysis and human review",
+      "acceptance_criteria": "Language fixtures and no-overwrite integration tests",
+      "verification": "Language fixtures and no-overwrite integration tests",
+      "files": [
+        "docs/phases/phase-8-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P09-001",
+      "phase": "9",
+      "component": "impact",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Evidence extraction and impact coverage",
+      "evidence": "Traversal only over caller-supplied partial edges",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement versioned source extraction, symbol/API mapping and test/workspace recommendations",
+      "acceptance_criteria": "Real repository fixtures, stale/partial evidence and language coverage tests",
+      "verification": "Real repository fixtures, stale/partial evidence and language coverage tests",
+      "files": [
+        "docs/phases/phase-9-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P10-001",
+      "phase": "10",
+      "component": "protocol",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Authenticated privileged tool routes",
+      "evidence": "Discovery-only stdio; all tool calls denied",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs",
+      "acceptance_criteria": "Adversarial authorization and Rust/TS/Python interoperability tests",
+      "verification": "Adversarial authorization and Rust/TS/Python interoperability tests",
+      "files": [
+        "docs/phases/phase-10-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P11-001",
+      "phase": "11",
+      "component": "collaboration/reliability",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Persistent collaboration and reliability suite",
+      "evidence": "Task/review data types only; no durable services or benchmarks",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Implement candidate-bound reviews, operations, backup/reconciliation and failure/concurrency harness",
+      "acceptance_criteria": "End-to-end, fault-injection, backup, recovery and benchmark evidence",
+      "verification": "End-to-end, fault-injection, backup, recovery and benchmark evidence",
+      "files": [
+        "docs/phases/phase-11-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P12-001",
+      "phase": "12",
+      "component": "release",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Native support and release verification",
+      "evidence": "Linux build only; remote CI and native macOS/Windows unknown",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-004"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Perform native testing, independent security review, migrations, packaging and release checks",
+      "acceptance_criteria": "Document native results and passing release/security gates",
+      "verification": "Document native results and passing release/security gates",
+      "files": [
+        "docs/phases/phase-12-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P10-002",
+      "phase": "10",
+      "component": "typescript sdk",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "TypeScript validation and interoperability",
+      "evidence": "TypeScript compiler unavailable in current environment",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-P10-001"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Typecheck and run against stdio transport with protocol/error fixtures",
+      "acceptance_criteria": "Automated TypeScript SDK interoperability tests",
+      "verification": "Automated TypeScript SDK interoperability tests",
+      "files": [
+        "docs/phases/phase-10-report.md"
+      ]
+    },
+    {
+      "id": "RIT-P03-001",
+      "phase": "3",
+      "component": "audit/authentication",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Actor construction and audit anchoring",
+      "evidence": "ActorContext has no external construction path; chain cannot detect tail truncation or full rewrite",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Design safe provider-issued authenticated context and independently protected audit anchors",
+      "acceptance_criteria": "Forgery, revocation, atomic audit and truncation/rollback tests",
+      "verification": "Forgery, revocation, atomic audit and truncation/rollback tests",
+      "files": [
+        "docs/phases/phase-3-report.md"
+      ]
+    },
+    {
+      "id": "RIT-OPS-002",
+      "phase": "10-12",
+      "component": "handoff history",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Full-history export contains temporary bytecode and environment paths",
+      "evidence": "Phase 10 accidentally committed generated Python bytecode containing a machine-specific path; removed in next commit. Historical reports also contain paths.",
+      "root_cause": "Generated files were staged before ignore rules; historical evidence recorded environment paths.",
+      "dependencies": [],
+      "interim_behavior": "Distribute sanitized snapshot-only Git bundle and source ZIP; retain original complete history locally and do not publish it without review.",
+      "required_remediation": "Obtain owner decision and review before full-history distribution, or use an independently audited history-redaction procedure with explicit authorization.",
+      "acceptance_criteria": "Approved full-history delivery or formally documented snapshot-only acceptance without leaking environment paths or artifacts.",
+      "verification": "Inspect every reachable object and archive entry, run bundle verification, and verify exact contents before distribution.",
+      "files": [
+        ".gitignore",
+        "docs/handoff/LOCAL_AGENT_REMEDIATION_REPORT.md"
+      ]
     }
   ]
 }
