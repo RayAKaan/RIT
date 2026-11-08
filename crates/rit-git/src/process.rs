@@ -163,7 +163,7 @@ impl Git {
         args: &[OsString],
         operation: &'static str,
     ) -> Result<Vec<u8>, GitError> {
-        self.run_internal(cwd, args, operation, &[], false)
+        self.run_internal(cwd, args, operation, &[], false, None)
             .map(|v| v.0)
     }
     fn run_internal(
@@ -173,6 +173,7 @@ impl Git {
         operation: &'static str,
         extra_env: &[(&str, OsString)],
         allow_exit_one: bool,
+        input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
         // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
         // Fail closed unless the Linux x86-64 child-process restriction can be installed.
@@ -221,7 +222,11 @@ impl Git {
                 "core.untrackedCache=false",
             ])
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         for (key, value) in extra_env {
@@ -231,6 +236,24 @@ impl Git {
             cmd.current_dir(path);
         }
         let mut child = cmd.group_spawn().map_err(GitError::Launch)?;
+        let writer = if let Some(input) = input {
+            if input.len() > 8_388_608 {
+                terminate(child)?;
+                return Err(GitError::OutputLimit);
+            }
+            let mut stdin = child
+                .inner()
+                .stdin
+                .take()
+                .ok_or(GitError::Parse("stdin pipe"))?;
+            let bytes = input.to_vec();
+            Some(thread::spawn(move || {
+                use std::io::Write;
+                stdin.write_all(&bytes)
+            }))
+        } else {
+            None
+        };
         let out = child
             .inner()
             .stdout
@@ -293,6 +316,12 @@ impl Git {
                 return Err(GitError::Timeout);
             }
             thread::sleep(Duration::from_millis(5));
+        }
+        if let Some(writer) = writer {
+            writer
+                .join()
+                .map_err(|_| GitError::Parse("stdin writer panicked"))?
+                .map_err(GitError::Launch)?;
         }
         let status = status.ok_or(GitError::Parse("process status"))?;
         let code = status.code().unwrap_or(-1);
@@ -948,6 +977,7 @@ impl Git {
             "conflict merge",
             &[("GIT_OBJECT_DIRECTORY", objects.as_os_str().into())],
             true,
+            None,
         )?;
         if !out.ends_with(&[0]) {
             return Err(GitError::Parse("merge output terminator"));
@@ -1555,6 +1585,596 @@ impl Git {
         self.run(Some(repo), &args, "workspace lock")?;
         Ok(())
     }
+    fn checkpoint_hash_blob(
+        &self,
+        repo: &Path,
+        format: rit_core::git_object::ObjectFormat,
+        bytes: &[u8],
+    ) -> Result<rit_core::git_object::ObjectId, GitError> {
+        let args = ["hash-object", "--no-filters", "-w", "--stdin"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (out, _) = self.run_internal(
+            Some(repo),
+            &args,
+            "workspace checkpoint blob",
+            &[],
+            false,
+            Some(bytes),
+        )?;
+        rit_core::git_object::ObjectId::new(
+            format,
+            std::str::from_utf8(&out)
+                .map_err(|_| GitError::NonUnicode)?
+                .trim_end(),
+        )
+        .map_err(GitError::Parse)
+    }
+    fn checkpoint_tree(
+        &self,
+        repo: &Path,
+        format: rit_core::git_object::ObjectFormat,
+        entries: &[(String, rit_core::git_object::ObjectId, bool)],
+    ) -> Result<rit_core::git_object::ObjectId, GitError> {
+        let mut input = Vec::new();
+        for (name, id, is_tree) in entries {
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+            {
+                return Err(GitError::Parse("checkpoint tree name"));
+            }
+            input.extend_from_slice(
+                format!(
+                    "{} {} {}\t{}",
+                    if *is_tree { "040000" } else { "100644" },
+                    if *is_tree { "tree" } else { "blob" },
+                    id.as_hex(),
+                    name
+                )
+                .as_bytes(),
+            );
+            input.push(0);
+        }
+        let args = ["mktree", "-z"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (out, _) = self.run_internal(
+            Some(repo),
+            &args,
+            "workspace checkpoint tree",
+            &[],
+            false,
+            Some(&input),
+        )?;
+        rit_core::git_object::ObjectId::new(
+            format,
+            std::str::from_utf8(&out)
+                .map_err(|_| GitError::NonUnicode)?
+                .trim_end(),
+        )
+        .map_err(GitError::Parse)
+    }
+    /// Capture a bounded raw-content checkpoint of a reconciled managed workspace.
+    /// No restore is provided; concurrent edits, ignored paths and submodules limit completeness.
+    pub fn content_checkpoint_create(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        include_untracked: bool,
+        ignored: &[String],
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, GitError> {
+        use rit_core::{
+            checkpoint::{
+                CapturedIndexEntry, CapturedWorktreeEntry, CheckpointId, ContentCheckpoint,
+                ContentCheckpointRecord,
+            },
+            git_object::ObjectId,
+        };
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "content checkpoints unavailable on this platform",
+            ));
+        }
+        if ignored.len() > 100 {
+            return Err(GitError::Parse("too many selected ignored paths"));
+        }
+        let reconciled = self.workspace_reconcile(repo)?;
+        let w = reconciled
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id && w.observation == "present")
+            .ok_or(GitError::Unavailable("workspace not present and ready"))?;
+        let root = Path::new(&w.manifest.path);
+        let ins = self.inspect(root)?;
+        let base = match ins.head {
+            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+            Head::Unborn { .. } => return Err(GitError::Parse("unborn checkpoint")),
+        };
+        let format = self.object_format(root)?;
+        let base = ObjectId::new(format, &base).map_err(GitError::Parse)?;
+        let index_path = Path::new(&ins.git_dir);
+        let index_bytes = read_worktree_file(index_path, "index")?.ok_or(GitError::Unavailable(
+            "workspace index missing or not regular",
+        ))?;
+        let index_blob = self.checkpoint_hash_blob(root, format, &index_bytes)?;
+        let staged_raw = self.run(
+            Some(root),
+            &["ls-files".into(), "--stage".into(), "-z".into()],
+            "workspace checkpoint index",
+        )?;
+        let mut staged = Vec::new();
+        let mut tracked = std::collections::BTreeSet::new();
+        let mut limitations=vec!["Non-atomic multi-file observation; it can become stale immediately".into(),"Ignored content excluded except explicitly selected files".into(),"LFS pointer blobs and observed raw worktree bytes do not establish LFS object availability".into()];
+        for row in staged_raw.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+            let tab = row
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or(GitError::Parse("index row"))?;
+            let meta = std::str::from_utf8(&row[..tab]).map_err(|_| GitError::NonUnicode)?;
+            let mut fields = meta.split(' ');
+            let mode = fields.next().ok_or(GitError::Parse("index mode"))?;
+            let oid = fields.next().ok_or(GitError::Parse("index object"))?;
+            let stage = fields
+                .next()
+                .ok_or(GitError::Parse("index stage"))?
+                .parse::<u8>()
+                .map_err(|_| GitError::Parse("index stage"))?;
+            if fields.next().is_some()
+                || stage > 3
+                || !matches!(mode, "100644" | "100755" | "120000" | "160000")
+            {
+                return Err(GitError::Parse("index entry"));
+            }
+            let path = std::str::from_utf8(&row[tab + 1..])
+                .map_err(|_| GitError::NonUnicode)?
+                .to_owned();
+            validate_checkpoint_path(&path)?;
+            tracked.insert(path.clone());
+            if mode == "160000" {
+                limitations.push(format!("Submodule {path}: gitlink recorded; submodule content and dirty state not captured"));
+            }
+            if stage != 0 {
+                limitations.push(format!(
+                    "Unmerged index stages for {path}: captured as evidence, restore unavailable"
+                ));
+            }
+            staged.push(CapturedIndexEntry {
+                path,
+                mode: mode.into(),
+                stage,
+                object: ObjectId::new(format, oid).map_err(GitError::Parse)?,
+            });
+            if staged.len() > 2000 {
+                return Err(GitError::Unavailable(
+                    "index entry count exceeds checkpoint limit",
+                ));
+            }
+        }
+        let untracked_raw = self.run(
+            Some(root),
+            &[
+                "ls-files".into(),
+                "--others".into(),
+                "--exclude-standard".into(),
+                "-z".into(),
+            ],
+            "workspace checkpoint untracked",
+        )?;
+        let untracked = untracked_raw
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+            .map(|b| {
+                std::str::from_utf8(b)
+                    .map(str::to_owned)
+                    .map_err(|_| GitError::NonUnicode)
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        if !include_untracked && !untracked.is_empty() {
+            limitations.push("Untracked files were not selected for capture".into())
+        }
+        let mut selected: std::collections::BTreeMap<String, String> =
+            tracked.into_iter().map(|p| (p, "tracked".into())).collect();
+        if include_untracked {
+            for path in untracked {
+                validate_checkpoint_path(&path)?;
+                selected.entry(path).or_insert_with(|| "untracked".into());
+            }
+        }
+        for path in ignored {
+            validate_checkpoint_path(path)?;
+            let result = self.run(
+                Some(root),
+                &[
+                    "check-ignore".into(),
+                    "--no-index".into(),
+                    "-q".into(),
+                    "--".into(),
+                    path.into(),
+                ],
+                "workspace checkpoint ignored",
+            );
+            match result {
+                Ok(_) => (),
+                Err(GitError::Exit { code: Some(1), .. }) => {
+                    return Err(GitError::Parse("selected path is not ignored"));
+                }
+                Err(e) => return Err(e),
+            }
+            if selected.contains_key(path) {
+                return Err(GitError::Parse("duplicate selected ignored path"));
+            }
+            selected.insert(path.clone(), "selected_ignored".into());
+        }
+        if selected.len() > 500 {
+            return Err(GitError::Unavailable("checkpoint file count exceeds 500"));
+        }
+        let mut total = 0usize;
+        let mut worktree = Vec::new();
+        for (path, category) in selected {
+            if staged.iter().any(|e| e.path == path && e.mode == "160000") {
+                continue;
+            }
+            match read_checkpoint_entry(root, &path)? {
+                None => {
+                    if category != "tracked" {
+                        return Err(GitError::Unavailable("selected file disappeared"));
+                    }
+                    worktree.push(CapturedWorktreeEntry {
+                        path,
+                        category,
+                        kind: "deleted".into(),
+                        executable: false,
+                        blob: None,
+                    })
+                }
+                Some((kind, executable, bytes)) => {
+                    total = total
+                        .checked_add(bytes.len())
+                        .ok_or(GitError::OutputLimit)?;
+                    if total > 8_388_608 {
+                        return Err(GitError::Unavailable("checkpoint total exceeds 8 MiB"));
+                    }
+                    let blob = self.checkpoint_hash_blob(root, format, &bytes)?;
+                    worktree.push(CapturedWorktreeEntry {
+                        path,
+                        category,
+                        kind: kind.into(),
+                        executable,
+                        blob: Some(blob),
+                    });
+                }
+            }
+        }
+        let after_index = read_worktree_file(index_path, "index")?
+            .ok_or(GitError::Unavailable("index disappeared"))?;
+        if index_bytes != after_index {
+            return Err(GitError::Unavailable("index changed during checkpoint"));
+        }
+        let after_head = self.query(root, &["rev-parse", "--verify", "HEAD"], "checkpoint HEAD")?;
+        if after_head != base.as_hex() {
+            return Err(GitError::Unavailable("HEAD changed during checkpoint"));
+        }
+        let shared = self.query(
+            root,
+            &["rev-parse", "--shared-index-path"],
+            "checkpoint shared index",
+        )?;
+        if !shared.is_empty() {
+            limitations
+                .push("Split-index shared-index file is not captured as raw index bytes".into())
+        }
+        let id = CheckpointId::new();
+        let manifest=ContentCheckpoint{schema_version:1,id,workspace:w.manifest.id,base:base.clone(),index_blob:index_blob.clone(),staged,worktree,limitations,complete:false,scope:"bounded raw worktree and index observation; non-atomic; no authenticated provenance or restore".into()};
+        let staged_entries = manifest
+            .staged
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.mode != "160000")
+            .map(|(i, e)| (format!("e{i:06}"), e.object.clone(), false))
+            .collect::<Vec<_>>();
+        let worktree_entries = manifest
+            .worktree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.blob.clone().map(|o| (format!("e{i:06}"), o, false)))
+            .collect::<Vec<_>>();
+        let staged_tree = self.checkpoint_tree(root, format, &staged_entries)?;
+        let worktree_tree = self.checkpoint_tree(root, format, &worktree_entries)?;
+        let manifest_json = serde_json::to_vec(&manifest)
+            .map_err(|_| GitError::Parse("checkpoint manifest serialization"))?;
+        let manifest_oid = self.checkpoint_hash_blob(root, format, &manifest_json)?;
+        let tree = self.checkpoint_tree(
+            root,
+            format,
+            &[
+                ("manifest.json".into(), manifest_oid, false),
+                ("index".into(), index_blob, false),
+                ("staged".into(), staged_tree, true),
+                ("worktree".into(), worktree_tree, true),
+            ],
+        )?;
+        let args = [
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit-tree",
+            tree.as_hex(),
+            "-p",
+            base.as_hex(),
+            "--no-gpg-sign",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let env = [
+            ("GIT_AUTHOR_NAME", OsString::from("RIT checkpoint")),
+            ("GIT_AUTHOR_EMAIL", OsString::from("checkpoint@rit.invalid")),
+            ("GIT_COMMITTER_NAME", OsString::from("RIT checkpoint")),
+            (
+                "GIT_COMMITTER_EMAIL",
+                OsString::from("checkpoint@rit.invalid"),
+            ),
+        ];
+        let (out, _) = self.run_internal(
+            Some(root),
+            &args,
+            "workspace checkpoint commit",
+            &env,
+            false,
+            Some(b"RIT content checkpoint (unauthenticated)\n"),
+        )?;
+        let commit = ObjectId::new(
+            format,
+            std::str::from_utf8(&out)
+                .map_err(|_| GitError::NonUnicode)?
+                .trim_end(),
+        )
+        .map_err(GitError::Parse)?;
+        let reference = format!("refs/rit/content-checkpoints/{id}");
+        let zero = "0".repeat(commit.as_hex().len());
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            reference.as_str(),
+            commit.as_hex(),
+            zero.as_str(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(root), &args, "workspace checkpoint ref")?;
+        Ok(ContentCheckpointRecord {
+            reference,
+            object: commit,
+            manifest,
+        })
+    }
+    /// List and validate content checkpoint manifests and referenced Git tree entries.
+    pub fn content_checkpoint_list(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::ContentCheckpointRecord>, GitError> {
+        use rit_core::{
+            checkpoint::{ContentCheckpoint, ContentCheckpointRecord},
+            git_object::ObjectId,
+        };
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/content-checkpoints/",
+            ],
+            "checkpoint content refs",
+        )?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let fields = line.split('\0').collect::<Vec<_>>();
+            if fields.len() != 3 || fields[2] != "commit" {
+                return Err(GitError::Parse("content checkpoint ref"));
+            }
+            let object = ObjectId::new(format, fields[1]).map_err(GitError::Parse)?;
+            let spec = format!("{}:manifest.json", object.as_hex());
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), spec.into()],
+                "workspace checkpoint manifest read",
+            )?;
+            if raw.len() > 1_048_576 {
+                return Err(GitError::Parse("checkpoint manifest too large"));
+            }
+            let m: ContentCheckpoint =
+                serde_json::from_slice(&raw).map_err(|_| GitError::Parse("checkpoint manifest"))?;
+            if m.schema_version != 1
+                || m.complete
+                || fields[0] != format!("refs/rit/content-checkpoints/{}", m.id)
+                || m.base.algorithm() != format
+                || m.index_blob.algorithm() != format
+            {
+                return Err(GitError::Parse("checkpoint manifest claims"));
+            }
+            for e in &m.staged {
+                validate_checkpoint_path(&e.path)?;
+                if e.object.algorithm() != format
+                    || e.stage > 3
+                    || !matches!(e.mode.as_str(), "100644" | "100755" | "120000" | "160000")
+                {
+                    return Err(GitError::Parse("checkpoint index evidence"));
+                }
+            }
+            for e in &m.worktree {
+                validate_checkpoint_path(&e.path)?;
+                if !matches!(
+                    e.category.as_str(),
+                    "tracked" | "untracked" | "selected_ignored"
+                ) || !matches!(e.kind.as_str(), "regular" | "symlink" | "deleted")
+                    || e.blob.as_ref().is_some_and(|o| o.algorithm() != format)
+                    || (e.kind == "deleted") != e.blob.is_none()
+                {
+                    return Err(GitError::Parse("checkpoint worktree evidence"));
+                }
+            }
+            result.push(ContentCheckpointRecord {
+                reference: fields[0].into(),
+                object,
+                manifest: m,
+            });
+        }
+        Ok(result)
+    }
+    /// Verify Git object connectivity and manifest/tree consistency, not authenticity or atomic completeness.
+    pub fn content_checkpoint_verify(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, GitError> {
+        let c = self
+            .content_checkpoint_list(repo)?
+            .into_iter()
+            .find(|c| c.manifest.id == id)
+            .ok_or(GitError::Parse("content checkpoint not found"))?;
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "core.multiPackIndex=false",
+            "-c",
+            "fsck.skipList=/dev/null",
+            "fsck",
+            "--no-reflogs",
+            "--no-progress",
+            c.object.as_hex(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(repo), &args, "workspace checkpoint fsck")?;
+        let parent_line = self.query(
+            repo,
+            &["rev-list", "--parents", "-n", "1", c.object.as_hex()],
+            "checkpoint parent",
+        )?;
+        let parents = parent_line.split_whitespace().collect::<Vec<_>>();
+        if parents.len() != 2
+            || parents[0] != c.object.as_hex()
+            || parents[1] != c.manifest.base.as_hex()
+        {
+            return Err(GitError::Parse("checkpoint base parent mismatch"));
+        }
+        let root = self.run(
+            Some(repo),
+            &["ls-tree".into(), "-z".into(), c.object.as_hex().into()],
+            "workspace checkpoint root verify",
+        )?;
+        let mut root_entries = std::collections::BTreeMap::new();
+        for row in root.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+            let row = std::str::from_utf8(row).map_err(|_| GitError::NonUnicode)?;
+            let (meta, name) = row
+                .split_once('\t')
+                .ok_or(GitError::Parse("checkpoint root entry"))?;
+            let mut f = meta.split(' ');
+            let mode = f.next().unwrap_or("");
+            let kind = f.next().unwrap_or("");
+            let oid = f.next().unwrap_or("");
+            if f.next().is_some()
+                || root_entries
+                    .insert(
+                        name.to_owned(),
+                        (mode.to_owned(), kind.to_owned(), oid.to_owned()),
+                    )
+                    .is_some()
+            {
+                return Err(GitError::Parse("checkpoint root fields"));
+            }
+        }
+        if root_entries.len() != 4
+            || !root_entries
+                .get("manifest.json")
+                .is_some_and(|(mode, kind, _)| mode == "100644" && kind == "blob")
+            || !root_entries.get("index").is_some_and(|(mode, kind, oid)| {
+                mode == "100644" && kind == "blob" && oid == c.manifest.index_blob.as_hex()
+            })
+            || !["staged", "worktree"].iter().all(|name| {
+                root_entries
+                    .get(*name)
+                    .is_some_and(|(mode, kind, _)| mode == "040000" && kind == "tree")
+            })
+        {
+            return Err(GitError::Parse("checkpoint root mismatch"));
+        }
+        let index = self.query(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{}:index", c.object.as_hex()),
+            ],
+            "checkpoint index blob",
+        )?;
+        if index != c.manifest.index_blob.as_hex() {
+            return Err(GitError::Parse("checkpoint index mismatch"));
+        }
+        for (section, expected) in [
+            (
+                "staged",
+                c.manifest
+                    .staged
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.mode != "160000")
+                    .map(|(i, e)| (format!("e{i:06}"), e.object.as_hex().to_owned()))
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+            ),
+            (
+                "worktree",
+                c.manifest
+                    .worktree
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| {
+                        e.blob
+                            .as_ref()
+                            .map(|o| (format!("e{i:06}"), o.as_hex().to_owned()))
+                    })
+                    .collect(),
+            ),
+        ] {
+            let spec = format!("{}:{section}", c.object.as_hex());
+            let bytes = self.run(
+                Some(repo),
+                &["ls-tree".into(), "-z".into(), spec.into()],
+                "workspace checkpoint tree verify",
+            )?;
+            let mut actual = std::collections::BTreeMap::new();
+            for row in bytes.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+                let row = std::str::from_utf8(row).map_err(|_| GitError::NonUnicode)?;
+                let (meta, name) = row
+                    .split_once('\t')
+                    .ok_or(GitError::Parse("checkpoint tree record"))?;
+                let mut f = meta.split(' ');
+                if f.next() != Some("100644") || f.next() != Some("blob") {
+                    return Err(GitError::Parse("checkpoint tree mode"));
+                }
+                let oid = f.next().ok_or(GitError::Parse("checkpoint tree oid"))?;
+                if f.next().is_some() || actual.insert(name.to_owned(), oid.to_owned()).is_some() {
+                    return Err(GitError::Parse("checkpoint tree fields"));
+                }
+            }
+            if actual != expected {
+                return Err(GitError::Parse("checkpoint manifest/tree mismatch"));
+            }
+        }
+        Ok(c)
+    }
     /// Create one commit-only Git checkpoint ref with an expected nonexistent old value.
     /// This does not capture or alter the index, working tree, untracked files or submodule contents.
     pub fn checkpoint_commit(
@@ -2133,5 +2753,105 @@ fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>, GitErr
 fn read_worktree_file(_: &Path, _: &str) -> Result<Option<Vec<u8>>, GitError> {
     Err(GitError::Unavailable(
         "worktree source reads unsupported on this platform",
+    ))
+}
+
+fn validate_checkpoint_path(path: &str) -> Result<(), GitError> {
+    if path.is_empty()
+        || path.len() > 4096
+        || Path::new(path).components().any(|c| match c {
+            std::path::Component::Normal(n) => n.to_string_lossy().eq_ignore_ascii_case(".git"),
+            _ => true,
+        })
+    {
+        return Err(GitError::Parse("invalid checkpoint path"));
+    }
+    Ok(())
+}
+type CapturedRawEntry = Option<(&'static str, bool, Vec<u8>)>;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn read_checkpoint_entry(root: &Path, path: &str) -> Result<CapturedRawEntry, GitError> {
+    use rustix::fs::{AtFlags, Mode, OFlags, fstat, open, openat, readlinkat, statat};
+    use std::io::Read;
+    use std::path::Component;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut dir = open(root, flags, Mode::empty()).map_err(|e| GitError::Launch(e.into()))?;
+    let mut parts = Path::new(path).components().peekable();
+    while let Some(Component::Normal(name)) = parts.next() {
+        if parts.peek().is_some() {
+            dir = match openat(&dir, name, flags, Mode::empty()) {
+                Ok(fd) => fd,
+                Err(
+                    rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP,
+                ) => return Ok(None),
+                Err(e) => return Err(GitError::Launch(e.into())),
+            };
+            continue;
+        }
+        let st = match statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(st) => st,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(GitError::Launch(e.into())),
+        };
+        if st.st_mode & 0o170000 == 0o120000 {
+            let target =
+                readlinkat(&dir, name, Vec::new()).map_err(|e| GitError::Launch(e.into()))?;
+            let after = statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|e| GitError::Launch(e.into()))?;
+            if st.st_ino != after.st_ino
+                || st.st_dev != after.st_dev
+                || st.st_ctime != after.st_ctime
+                || st.st_ctime_nsec != after.st_ctime_nsec
+            {
+                return Err(GitError::Unavailable("symlink changed during checkpoint"));
+            }
+            let bytes = target.into_bytes();
+            if bytes.len() > 1_048_576 {
+                return Err(GitError::OutputLimit);
+            }
+            return Ok(Some(("symlink", false, bytes)));
+        }
+        if st.st_mode & 0o170000 != 0o100000 {
+            return Err(GitError::Unavailable(
+                "unsupported non-regular checkpoint path",
+            ));
+        }
+        let fd = openat(
+            &dir,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|e| GitError::Launch(e.into()))?;
+        let before = fstat(&fd).map_err(|e| GitError::Launch(e.into()))?;
+        if before.st_mode & 0o170000 != 0o100000 || before.st_size < 0 || before.st_size > 1_048_576
+        {
+            return Err(GitError::Unavailable(
+                "checkpoint file unsupported or exceeds 1 MiB",
+            ));
+        }
+        let file = std::fs::File::from(fd);
+        let mut bytes = Vec::new();
+        (&file)
+            .take(1_048_577)
+            .read_to_end(&mut bytes)
+            .map_err(GitError::Launch)?;
+        let after = fstat(&file).map_err(|e| GitError::Launch(e.into()))?;
+        if before.st_size != after.st_size
+            || before.st_mtime != after.st_mtime
+            || before.st_mtime_nsec != after.st_mtime_nsec
+            || before.st_ctime != after.st_ctime
+            || before.st_ctime_nsec != after.st_ctime_nsec
+        {
+            return Err(GitError::Unavailable("checkpoint file changed during read"));
+        }
+        return Ok(Some(("regular", before.st_mode & 0o111 != 0, bytes)));
+    }
+    Err(GitError::Parse("checkpoint path"))
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn read_checkpoint_entry(_: &Path, _: &str) -> Result<CapturedRawEntry, GitError> {
+    Err(GitError::Unavailable(
+        "content checkpoint unsupported on this platform",
     ))
 }

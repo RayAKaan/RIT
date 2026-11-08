@@ -114,7 +114,7 @@ pub enum Command {
         #[command(subcommand)]
         command: SubmissionCommand,
     },
-    /// Commit-only Git checkpoints; full capture and restore are unavailable.
+    /// Bounded Git-object content and commit-only checkpoints; restore unavailable.
     Checkpoint {
         #[command(subcommand)]
         command: CheckpointCommand,
@@ -427,6 +427,15 @@ pub enum CheckpointCommand {
         repo: PathBuf,
         #[arg(long)]
         commit_only: bool,
+        /// Capture bounded raw workspace and index content.
+        #[arg(long, conflicts_with = "commit_only")]
+        workspace: Option<String>,
+        /// Explicitly include nonignored untracked files (may contain secrets).
+        #[arg(long)]
+        include_untracked: bool,
+        /// Explicitly capture an ignored file by exact relative path (repeatable).
+        #[arg(long)]
+        include_ignored: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -439,6 +448,14 @@ pub enum CheckpointCommand {
     },
     /// Verify a commit-only checkpoint with Git fsck.
     Verify {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a content checkpoint manifest.
+    Inspect {
         id: String,
         #[arg(long)]
         repo: PathBuf,

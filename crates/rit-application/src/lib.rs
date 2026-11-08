@@ -316,6 +316,33 @@ impl GitCheckpointService {
     ) -> Result<rit_core::checkpoint::CommitCheckpoint, ApplicationError> {
         Ok(self.git.checkpoint_commit(repo)?)
     }
+    /// Capture bounded raw content and index evidence for a managed workspace.
+    pub fn create_content(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        include_untracked: bool,
+        ignored: &[String],
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, ApplicationError> {
+        Ok(self
+            .git
+            .content_checkpoint_create(repo, id, include_untracked, ignored)?)
+    }
+    /// List unauthenticated content checkpoints.
+    pub fn list_content(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::ContentCheckpointRecord>, ApplicationError> {
+        Ok(self.git.content_checkpoint_list(repo)?)
+    }
+    /// Verify content checkpoint objects and internal tree/manifest consistency.
+    pub fn verify_content(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, ApplicationError> {
+        Ok(self.git.content_checkpoint_verify(repo, id)?)
+    }
     /// List commit-only checkpoint references.
     pub fn list(
         &self,

@@ -122,3 +122,67 @@ mod tests {
         assert!(c.preview(&["missing".into()], &[]).is_err());
     }
 }
+
+/// One staged index entry captured by a content checkpoint.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedIndexEntry {
+    /// Repository-relative path.
+    pub path: String,
+    /// Git index mode.
+    pub mode: String,
+    /// Index conflict stage (zero for normal entries).
+    pub stage: u8,
+    /// Existing index object ID; gitlinks may refer to a different object database.
+    pub object: crate::git_object::ObjectId,
+}
+/// Raw file or symlink content captured from a worktree.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedWorktreeEntry {
+    /// Repository-relative path.
+    pub path: String,
+    /// `tracked`, `untracked`, or `selected_ignored`.
+    pub category: String,
+    /// `regular`, `symlink`, or `deleted`.
+    pub kind: String,
+    /// POSIX executable bit for regular files.
+    pub executable: bool,
+    /// Git blob holding exact raw file bytes or link target; absent for deletion.
+    pub blob: Option<crate::git_object::ObjectId>,
+}
+/// Unauthenticated Git-object coordination data, not a restore authorization.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentCheckpoint {
+    /// Format version.
+    pub schema_version: u32,
+    /// Checkpoint identity.
+    pub id: CheckpointId,
+    /// Workspace identity, coordination only.
+    pub workspace: WorkspaceId,
+    /// Base commit captured before and checked again after capture.
+    pub base: crate::git_object::ObjectId,
+    /// Git blob of the original index bytes.
+    pub index_blob: crate::git_object::ObjectId,
+    /// Original index entries and stages.
+    pub staged: Vec<CapturedIndexEntry>,
+    /// Exact raw worktree content for observed paths.
+    pub worktree: Vec<CapturedWorktreeEntry>,
+    /// Explicit categories and state that cannot be guaranteed complete.
+    pub limitations: Vec<String>,
+    /// Always false: capture spans time and cannot guarantee complete atomic coverage.
+    pub complete: bool,
+    /// Explicit source and security limitations.
+    pub scope: String,
+}
+/// Content checkpoint ref and its validated manifest, not authenticated provenance.
+#[derive(Clone, Debug, Serialize)]
+pub struct ContentCheckpointRecord {
+    /// RIT-owned ref, with expected-zero creation.
+    pub reference: String,
+    /// Git commit retaining snapshot objects and base history.
+    pub object: crate::git_object::ObjectId,
+    /// Content manifest.
+    pub manifest: ContentCheckpoint,
+}

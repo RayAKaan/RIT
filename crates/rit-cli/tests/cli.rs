@@ -1357,3 +1357,134 @@ fn conflict_simulation_is_isolated_and_reports_git_stages_and_structural_evidenc
     assert!(!bad.status.success());
     assert!(!marker.exists());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn content_checkpoint_captures_staged_raw_worktree_untracked_ignored_and_links_without_touching_index()
+ {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
+    std::fs::write(repo.join("tracked.txt"), "base\n").unwrap();
+    std::fs::write(repo.join("script.sh"), "#!/bin/sh\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = d.path().join("work");
+    let workspace = run(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        w.to_str().unwrap(),
+        "--name",
+        "checkpoint",
+        "--json",
+    ]);
+    let wid = workspace["workspace"]["id"].as_str().unwrap();
+    std::fs::write(w.join("tracked.txt"), "staged\n").unwrap();
+    git(&w, &["add", "tracked.txt"]);
+    let staged_oid = git(&w, &["rev-parse", ":tracked.txt"]);
+    std::fs::write(w.join("tracked.txt"), "unstaged\n").unwrap();
+    std::fs::write(w.join("untracked.txt"), "new data\n").unwrap();
+    std::fs::write(w.join("ignored.txt"), "ignored data\n").unwrap();
+    symlink("tracked.txt", w.join("link.txt")).unwrap();
+    std::fs::set_permissions(w.join("script.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let idx = git(&w, &["rev-parse", "--git-path", "index"]);
+    let original_index = std::fs::read(&idx).unwrap();
+    let snapshot = run(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--include-untracked",
+        "--include-ignored",
+        "ignored.txt",
+        "--json",
+    ]);
+    let c = &snapshot["checkpoint"];
+    let id = c["manifest"]["id"].as_str().unwrap();
+    let manifest = &c["manifest"];
+    assert_eq!(manifest["complete"], false);
+    assert_eq!(std::fs::read(&idx).unwrap(), original_index);
+    let stage = manifest["staged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["path"] == "tracked.txt")
+        .unwrap();
+    assert_eq!(stage["object"]["hex"], staged_oid);
+    let entries = manifest["worktree"].as_array().unwrap();
+    for (name, expected, category) in [
+        ("tracked.txt", "unstaged", "tracked"),
+        ("untracked.txt", "new data", "untracked"),
+        ("ignored.txt", "ignored data", "selected_ignored"),
+        ("link.txt", "tracked.txt", "untracked"),
+    ] {
+        let e = entries.iter().find(|x| x["path"] == name).unwrap();
+        assert_eq!(e["category"], category);
+        assert_eq!(
+            git(
+                &repo,
+                &["cat-file", "blob", e["blob"]["hex"].as_str().unwrap()]
+            ),
+            expected
+        );
+    }
+    assert_eq!(
+        entries.iter().find(|x| x["path"] == "link.txt").unwrap()["kind"],
+        "symlink"
+    );
+    assert_eq!(
+        entries.iter().find(|x| x["path"] == "script.sh").unwrap()["executable"],
+        true
+    );
+    let verify = run(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    assert_eq!(verify["git_fsck"], "passed");
+    assert_eq!(verify["manifest_tree_consistency"], "passed");
+    assert_eq!(verify["atomic_completeness"], false);
+    git(&repo, &["gc", "--quiet"]);
+    let list = run(&["checkpoint", "list", "--repo", rp, "--json"]);
+    assert_eq!(list["content_checkpoints"].as_array().unwrap().len(), 1);
+    run(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    assert_eq!(std::fs::read(&idx).unwrap(), original_index);
+    let restore = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args(["checkpoint", "restore", id])
+        .output()
+        .unwrap();
+    assert!(!restore.status.success());
+    assert_eq!(
+        std::fs::read_to_string(w.join("tracked.txt")).unwrap(),
+        "unstaged\n"
+    );
+}
