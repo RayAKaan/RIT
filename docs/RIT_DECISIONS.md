@@ -54,3 +54,8 @@ Transitions are required to be tested after each write, sync, rename, SQLite com
 ## Additional feasibility observation
 
 On this VM, `name_to_handle_at` succeeded on both `/tmp` (tmpfs) and `/home/user` (ext4). In one disposable ext4 trial a replacement reused the original inode immediately but returned different opaque handle bytes. This is **only an observation**, not a documented guarantee across arbitrary filesystems, reboots, mount replacement, handle-generation wraparound or Windows/macOS. Linux manual pages state that not all filesystems support handles, that `open_by_handle_at` may require `CAP_DAC_READ_SEARCH`, and that mount IDs can be reused. No production protocol or writable SQLite authorization has been based on this experiment.
+
+
+## V2 diagnostic and adoption change
+
+`rit storage adopt-legacy` now returns unavailable instead of invoking the unsafe legacy adoption library API. The API itself remains exposed and experimental, so the security issue is not resolved. `doctor` now adds `overall_status` and `security_gate` to its schema-2 JSON and changes the marked, readable storage status from `ok` to `schema_readable_security_unverified`. Consumers matching the old status string must update. A successful doctor process exit means diagnostics were collected, **not** that the product passed security acceptance; the new overall field is `security_blocked` absent a runtime error. This is an intentional observable behavior change to prevent a false health claim.

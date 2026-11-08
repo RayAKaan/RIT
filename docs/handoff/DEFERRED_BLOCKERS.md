@@ -1,6 +1,6 @@
 # Deferred blockers
 
-Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED; no blocker is an accepted risk. Existing Phase 2 registry operations are unauthenticated; adoption and recovery are incomplete.
+Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED; no blocker is an accepted risk. Existing Phase 2 registry operations are unauthenticated; adoption library API and recovery are incomplete.
 
 | ID | Severity | Component | Title | Evidence |
 |---|---|---|---|---|

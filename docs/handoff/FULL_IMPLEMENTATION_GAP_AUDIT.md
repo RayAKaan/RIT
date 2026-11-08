@@ -17,13 +17,13 @@ Audit baseline: local `phase/12-release-foundations`, `ebe84d4d0718306f4ae841f11
 | §18 | `rit-protocol`, `sdk/{python,typescript}` | Discovery-only stdio prototype supports legacy 2025-03-26 and a 2026-07-28 modern discovery subset, with empty tool list; no privileged tools, auth, shared services, HTTP API or full client SDKs. Rust, Python and TypeScript exercise real stdio discovery/denial. |
 | §19 | `rit-core/src/collaboration.rs` | Pure task/review models only; collaboration, production reliability harness and benchmark measurements absent. |
 | §20–21 | README, `docs`, `.github/workflows/ci.yml` | Partial docs, pinned Rust, one OS matrix. Missing required guides, release packaging, dependency/license review, actual native and remote CI evidence. Many specified commands unavailable or absent. |
-| §§22–26 | storage threat model, contracts and disabled interfaces | No recoverable Git/SQLite operations or authenticated authorization pipeline. No validated agent isolation; privileged later operations disabled. Existing registry and legacy adoption need security remediation. |
+| §§22–26 | storage threat model, contracts and disabled interfaces | No recoverable Git/SQLite operations or authenticated authorization pipeline. No validated agent isolation; privileged later operations disabled. Existing registry and the legacy adoption library API need security remediation; the legacy-adoption CLI is disabled. |
 | §§27–32 | tests under each crate and historical results | Unit, real Git, CLI and security tests exist; two mandatory Phase 2.1 tests fail. Real multi-workspace/checkpoint/integration/end-to-end and native-platform security tests absent. Build success is not release acceptance. |
-| §§33–40 | phase branches, handoff docs and previous artifacts | Earlier bundle intentionally snapshot-only; must provide independently sanitized topology-preserving history where possible, inspect all reachable objects and verify clone/branches. Original checkout history must not be changed. |
+| §§33–40 | phase branches, handoff docs and previous artifacts | Earlier bundle was snapshot-only. A separately sanitized mirror retained branch names and commit parent topology; reachable objects, clone and branches were checked. Original checkout history must not be changed. |
 
 ## Implementation decision
 
-Continue safe independent work without weakening acceptance tests. Protected production identity, credential, authorization, process execution, checkpoint restore and publication cannot be enabled before their prerequisites are verified. Existing Phase 2 registry/adoption paths are experimental and do not satisfy the storage/identity contract. Read-only Git inspection does not authenticate the caller and is not a substitute for application authorization.
+Continue safe independent work without weakening acceptance tests. Protected production identity, credential, authorization, process execution, checkpoint restore and publication cannot be enabled before their prerequisites are verified. Existing Phase 2 registry and library adoption paths are experimental, the adoption CLI fails closed, and they do not satisfy the storage/identity contract. Read-only Git inspection does not authenticate the caller and is not a substitute for application authorization.
 
 ## Full end-to-end scenario
 
