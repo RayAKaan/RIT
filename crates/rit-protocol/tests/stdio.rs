@@ -105,7 +105,7 @@ fn scoped_mcp_reads_real_repository_and_denies_mutations_and_paths() {
         serde_json::from_str::<serde_json::Value>(&s).unwrap()
     };
     let list = call(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 13);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 14);
     let result = call(
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repository.inspect","arguments":{}}}),
     );
@@ -257,6 +257,18 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
         std::fs::read_to_string(d.path().join("recovered/feature.py")).unwrap(),
         "import app\n"
     );
+    let extraction = checkpoints
+        .extract_new(
+            &repo,
+            checkpoint.manifest.id,
+            &d.path().join("extracted"),
+            &["feature.py".into()],
+        )
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(d.path().join("extracted/feature.py")).unwrap(),
+        "import app\n"
+    );
     git(work, &["add", "."]);
     git(work, &["commit", "-qm", "feature"]);
     let submissions = rit_application::submissions::SubmissionService::new(provider.clone());
@@ -310,6 +322,11 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
             "checkpoint.restores",
             "restores",
             restore.operation.id.to_string(),
+        ),
+        (
+            "checkpoint.extractions",
+            "extractions",
+            extraction.operation.id.to_string(),
         ),
         (
             "submission.reconcile",

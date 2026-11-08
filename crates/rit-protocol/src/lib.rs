@@ -173,6 +173,9 @@ impl ReadOnlyScope {
             "checkpoint.restores" => Ok(
                 json!({"schema_version":1,"restores":rit_application::GitCheckpointService::new(self.git.clone()).restores(&self.repo).map_err(|_|())?,"authenticated":false}),
             ),
+            "checkpoint.extractions" => Ok(
+                json!({"schema_version":1,"extractions":rit_application::GitCheckpointService::new(self.git.clone()).extractions(&self.repo).map_err(|_|())?,"authenticated":false}),
+            ),
             "submission.reconcile" => Ok(
                 json!({"schema_version":1,"submissions":rit_application::submissions::SubmissionService::new(self.git.clone()).reconcile(&self.repo).map_err(|_|())?,"authenticated":false}),
             ),
@@ -190,7 +193,7 @@ fn tool_list(scope: Option<&ReadOnlyScope>) -> Vec<Value> {
     if scope.is_none() {
         return Vec::new();
     }
-    ["repository.inspect","repository.status","repository.branches","repository.history","repository.worktrees","dependencies.inspect","workspace.list","checkpoint.list","submission.list","candidate.list","workspace.operations","checkpoint.restores","submission.reconcile"].iter().map(|name|json!({"name":name,"description":"Read-only inspection of the explicitly configured repository; no path arguments.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})).collect()
+    ["repository.inspect","repository.status","repository.branches","repository.history","repository.worktrees","dependencies.inspect","workspace.list","checkpoint.list","submission.list","candidate.list","workspace.operations","checkpoint.restores","checkpoint.extractions","submission.reconcile"].iter().map(|name|json!({"name":name,"description":"Read-only inspection of the explicitly configured repository; no path arguments.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})).collect()
 }
 fn error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
