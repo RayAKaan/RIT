@@ -455,3 +455,148 @@ fn detects_shallow_local_clone_and_ahead_behind() {
     assert_eq!(status.ahead, Some(1));
     assert_eq!(status.behind, Some(0));
 }
+#[test]
+fn behind_and_type_change_are_observed() {
+    let d = TempDir::new().unwrap();
+    let source = d.path().join("source");
+    let clone = d.path().join("clone");
+    fs::create_dir(&source).unwrap();
+    run(&source, &["init", "-q"]);
+    fs::write(source.join("tracked"), "initial").unwrap();
+    run(&source, &["add", "tracked"]);
+    run(
+        &source,
+        &[
+            "-c",
+            "user.name=x",
+            "-c",
+            "user.email=x@y",
+            "commit",
+            "-qm",
+            "initial",
+        ],
+    );
+    assert!(
+        Command::new("git")
+            .args([
+                "clone",
+                "-q",
+                source.to_str().unwrap(),
+                clone.to_str().unwrap()
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    run(
+        &source,
+        &[
+            "-c",
+            "user.name=x",
+            "-c",
+            "user.email=x@y",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "advance",
+        ],
+    );
+    run(&clone, &["fetch", "-q"]);
+    let s = Git::discover(None)
+        .unwrap()
+        .inspect(&clone)
+        .unwrap()
+        .status
+        .unwrap();
+    assert_eq!(s.ahead, Some(0));
+    assert_eq!(s.behind, Some(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        fs::remove_file(clone.join("tracked")).unwrap();
+        symlink("target", clone.join("tracked")).unwrap();
+        let s = Git::discover(None)
+            .unwrap()
+            .inspect(&clone)
+            .unwrap()
+            .status
+            .unwrap();
+        assert!(
+            s.changes
+                .iter()
+                .any(|c| c.path == "tracked" && c.xy.as_deref() == Some(".T")),
+            "{s:?}"
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn unsupported_and_unknown_versions_are_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new().unwrap();
+    let p = d.path().join("gitfake");
+    fs::write(&p, "#!/bin/sh\necho 'git version 2.28.0'\n").unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        Git::discover(Some(p.as_os_str())),
+        Err(rit_git::GitError::Unsupported(_))
+    ));
+    fs::write(&p, "#!/bin/sh\necho not-a-version\n").unwrap();
+    assert!(matches!(
+        Git::discover(Some(p.as_os_str())),
+        Err(rit_git::GitError::Version)
+    ));
+}
+#[test]
+fn missing_head_is_an_error() {
+    let d = TempDir::new().unwrap();
+    run(d.path(), &["init", "-q"]);
+    fs::remove_file(d.path().join(".git/HEAD")).unwrap();
+    assert!(Git::discover(None).unwrap().inspect(d.path()).is_err());
+}
+#[cfg(unix)]
+#[test]
+fn inaccessible_repository_is_error_for_unprivileged_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new().unwrap();
+    let repo = d.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    run(&repo, &["init", "-q"]);
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o000)).unwrap();
+    // A privileged runner can bypass mode bits, so do not call that a pass.
+    let observed = Git::discover(None).unwrap().inspect(&repo);
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o700)).unwrap();
+    if rustix_uid_is_root() {
+        eprintln!("SKIP: root bypasses directory permissions");
+        return;
+    }
+    assert!(observed.is_err());
+}
+#[cfg(unix)]
+fn rustix_uid_is_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .is_some_and(|o| o.stdout == b"0\n")
+}
+#[cfg(unix)]
+#[test]
+fn timeout_kills_non_escaped_child_process_group() {
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    let d = TempDir::new().unwrap();
+    let script = d.path().join("fake-git");
+    let marker = d.path().join("child-survived");
+    fs::write(&script,format!("#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --version ] && {{ echo 'git version 2.47.3'; exit 0; }}; done\n(sleep 2; touch '{}') &\nwait\n",marker.display())).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let git = Git::discover(Some(script.as_os_str()))
+        .unwrap()
+        .with_limits(Duration::from_millis(150), 1024);
+    assert!(matches!(
+        git.inspect(d.path()),
+        Err(rit_git::GitError::Timeout)
+    ));
+    std::thread::sleep(Duration::from_millis(2300));
+    assert!(!marker.exists());
+}

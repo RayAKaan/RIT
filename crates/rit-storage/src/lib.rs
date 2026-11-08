@@ -1,5 +1,6 @@
 //! SQLite-backed local registry of repositories, not source history.
 #![forbid(unsafe_code)]
+mod secure_dir;
 use rit_core::repository::{Inspection, Location, Repository, RepositoryId};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
@@ -12,6 +13,9 @@ use thiserror::Error;
 /// Registry failures never trigger deletion or recreation of existing data.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// The selected directory does not meet the storage trust policy.
+    #[error("unsafe RIT data directory: {0}")]
+    UnsafeDirectory(&'static str),
     /// File or directory creation failure.
     #[error("cannot prepare data directory: {0}")]
     Io(#[from] std::io::Error),
@@ -27,6 +31,25 @@ pub enum StorageError {
     /// A version-zero database has unrelated schema and cannot be initialized safely.
     #[error("refusing to initialize a non-empty unrecognized SQLite database")]
     UnrecognizedDatabase,
+    /// Unmarked version-one registry needs explicit owner adoption.
+    #[error(
+        "unmarked legacy registry; verify and explicitly adopt it with rit storage adopt-legacy --confirm"
+    )]
+    LegacyAdoptionRequired,
+    /// Database application ID does not match RIT.
+    #[error("unrecognized SQLite application ID {0:#x}")]
+    UnknownApplication(i64),
+    /// SQLite needs a hot journal recovered before a safe read-only identity check.
+    #[error(
+        "storage recovery is blocked by a hot journal; preserve the database and journal together and consult the Phase 2.1 report"
+    )]
+    RecoveryBlocked,
+    /// A purported RIT schema is not exactly the expected schema.
+    #[error("registry schema or contents are not recognized; no adoption performed")]
+    BadSchema,
+    /// Explicit confirmation is required for irreversible adoption.
+    #[error("legacy adoption requires --confirm after verifying a backup")]
+    ConfirmationRequired,
     /// The local system clock is not valid.
     #[error("system clock is before Unix epoch or out of range")]
     Clock,
@@ -73,54 +96,204 @@ pub fn data_dir(explicit: Option<&Path>) -> Result<PathBuf, StorageError> {
         .or_else(|| std::env::var_os("HOME").map(|v| PathBuf::from(v).join(".local/share")));
     Ok(base.ok_or(StorageError::NoDataDir)?.join("rit"))
 }
+/// Stable SQLite application_id for RIT: ASCII `RIT1`.
+pub const APPLICATION_ID: i64 = 0x5249_5431;
+const REPOSITORIES_SQL: &str = "CREATE TABLE repositories (id TEXT PRIMARY KEY NOT NULL, common_git_dir TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL CHECK(length(trim(display_name))>0), object_format TEXT NOT NULL, is_bare INTEGER NOT NULL CHECK(is_bare IN (0,1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)";
+const LOCATIONS_SQL: &str = "CREATE TABLE repository_locations (id INTEGER PRIMARY KEY, repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE, path TEXT NOT NULL UNIQUE, git_dir TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('worktree','bare')), first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL)";
+fn identity(c: &Connection) -> Result<(i64, i64), StorageError> {
+    Ok((
+        c.pragma_query_value(None, "application_id", |r| r.get(0))?,
+        c.pragma_query_value(None, "user_version", |r| r.get(0))?,
+    ))
+}
+fn validate_schema(c: &Connection) -> Result<(), StorageError> {
+    let mut stmt = c.prepare(
+        "SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = [
+        ("table", "repositories", REPOSITORIES_SQL),
+        ("table", "repository_locations", LOCATIONS_SQL),
+    ];
+    if rows.len() != expected.len()
+        || rows
+            .iter()
+            .zip(expected)
+            .any(|((kind, name, sql), (ek, en, es))| {
+                kind != ek || name != en || sql.as_deref() != Some(es)
+            })
+    {
+        return Err(StorageError::BadSchema);
+    }
+    let ok: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if ok != "ok" {
+        return Err(StorageError::BadSchema);
+    }
+    let mut fk = c.prepare("PRAGMA foreign_key_check")?;
+    if fk.query([])?.next()?.is_some() {
+        return Err(StorageError::BadSchema);
+    }
+    let mut ids = c.prepare("SELECT id FROM repositories")?;
+    for id in ids.query_map([], |r| r.get::<_, String>(0))? {
+        id?.parse::<RepositoryId>()
+            .map_err(|_| StorageError::BadSchema)?;
+    }
+    Ok(())
+}
+fn validate_marked(c: &Connection) -> Result<(), StorageError> {
+    let (app, version) = identity(c)?;
+    if version > 1 {
+        return Err(StorageError::FutureSchema(version));
+    }
+    if app == 0 && version == 1 {
+        return Err(StorageError::LegacyAdoptionRequired);
+    }
+    if app != APPLICATION_ID {
+        return if app == 0 {
+            Err(StorageError::UnrecognizedDatabase)
+        } else {
+            Err(StorageError::UnknownApplication(app))
+        };
+    }
+    if version != 1 {
+        return Err(StorageError::BadSchema);
+    }
+    validate_schema(c)
+}
+fn preflight<T>(result: Result<T, StorageError>) -> Result<T, StorageError> {
+    match result {
+        Err(StorageError::Sql(rusqlite::Error::SqliteFailure(ref error, _)))
+            if error.extended_code == rusqlite::ffi::SQLITE_READONLY_ROLLBACK =>
+        {
+            Err(StorageError::RecoveryBlocked)
+        }
+        other => other,
+    }
+}
+fn readonly(path: &Path) -> Result<Connection, StorageError> {
+    let c = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    c.busy_timeout(Duration::from_secs(5))?;
+    Ok(c)
+}
+/// A read-only summary; it does not automatically claim an unmarked registry.
+#[derive(Debug)]
+pub struct StorageVerification {
+    /// SQLite application identifier.
+    pub application_id: i64,
+    /// SQLite schema version.
+    pub user_version: i64,
+    /// Whether this is a valid RIT-marked registry.
+    pub marked_rit: bool,
+    /// Whether it meets the exact legacy v1 schema checks (owner confirmation is still required).
+    pub valid_legacy: bool,
+}
+/// Read-only verification of a database in an approved data directory.
+pub fn verify(dir: &Path) -> Result<Option<StorageVerification>, StorageError> {
+    let Some(guard) = secure_dir::prepare(dir, false)? else {
+        return Ok(None);
+    };
+    let p = guard.path.join("rit.sqlite3");
+    if !p.exists() {
+        return Ok(None);
+    }
+    let c = readonly(&p)?;
+    let (app, version) = identity(&c)?;
+    let valid = if version == 1 {
+        match preflight(validate_schema(&c)) {
+            Ok(()) => true,
+            Err(StorageError::BadSchema) => false,
+            Err(e) => return Err(e),
+        }
+    } else {
+        false
+    };
+    Ok(Some(StorageVerification {
+        application_id: app,
+        user_version: version,
+        marked_rit: app == APPLICATION_ID && valid,
+        valid_legacy: app == 0 && valid,
+    }))
+}
+/// Explicitly claim an exact unmarked Phase 2 v1 schema, preserving its data transactionally.
+pub fn adopt_legacy(dir: &Path, confirmed: bool) -> Result<(), StorageError> {
+    if !confirmed {
+        return Err(StorageError::ConfirmationRequired);
+    }
+    let guard = secure_dir::prepare(dir, false)?.ok_or(StorageError::UnrecognizedDatabase)?;
+    let _lock = guard.lock_initialization()?;
+    let path = guard.path.join("rit.sqlite3");
+    {
+        let c = readonly(&path)?;
+        if identity(&c)? != (0, 1) {
+            return Err(StorageError::BadSchema);
+        }
+        preflight(validate_schema(&c))?;
+    }
+    let mut c = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    c.busy_timeout(Duration::from_secs(5))?;
+    let t = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if identity(&t)? != (0, 1) {
+        return Err(StorageError::BadSchema);
+    }
+    validate_schema(&t)?;
+    t.pragma_update(None, "application_id", APPLICATION_ID)?;
+    t.commit()?;
+    Ok(())
+}
 /// Local SQLite repository registry.
 pub struct Registry {
     connection: Connection,
+    _directory: secure_dir::Guard,
 }
 impl Registry {
     /// Create/open the database and transactionally migrate schema 0 to schema 1.
     pub fn open(dir: &Path) -> Result<Self, StorageError> {
-        fs::create_dir_all(dir)?;
-        // Defense in depth only: this pathname check cannot bind SQLite's later open
-        // to the same inode. See the transition report for the unresolved race.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            match fs::symlink_metadata(dir.join("rit.sqlite3")) {
-                Ok(metadata) if metadata.nlink() > 1 => {
-                    return Err(StorageError::HardLinkedDatabase);
-                }
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                _ => {}
-            }
+        let directory = secure_dir::prepare(dir, true)?
+            .ok_or(StorageError::UnsafeDirectory("missing data directory"))?;
+        let _lock = directory.lock_initialization()?;
+        let created = directory.create_database_if_missing()?;
+        let path = directory.path.join("rit.sqlite3");
+        if !created {
+            let existing = readonly(&path)?;
+            preflight(validate_marked(&existing))?;
         }
         let mut c = Connection::open_with_flags(
-            dir.join("rit.sqlite3"),
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", "ON")?;
         c.pragma_update(None, "synchronous", "FULL")?;
         let t = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: i64 = t.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
-            return Err(StorageError::FutureSchema(version));
-        }
-        if version == 0 {
-            let objects: i64 = t.query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
-                [],
-                |r| r.get(0),
-            )?;
-            if objects != 0 {
-                return Err(StorageError::UnrecognizedDatabase);
+        if created {
+            if identity(&t)? != (0, 0) {
+                return Err(StorageError::BadSchema);
             }
-            t.execute_batch("CREATE TABLE repositories (id TEXT PRIMARY KEY NOT NULL, common_git_dir TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL CHECK(length(trim(display_name))>0), object_format TEXT NOT NULL, is_bare INTEGER NOT NULL CHECK(is_bare IN (0,1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE repository_locations (id INTEGER PRIMARY KEY, repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE, path TEXT NOT NULL UNIQUE, git_dir TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('worktree','bare')), first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL); PRAGMA user_version=1;")?;
+            t.execute_batch(&format!("{REPOSITORIES_SQL}; {LOCATIONS_SQL};"))?;
+            t.pragma_update(None, "application_id", APPLICATION_ID)?;
+            t.pragma_update(None, "user_version", 1)?;
+        } else {
+            validate_marked(&t)?;
         }
         t.commit()?;
-        Ok(Self { connection: c })
+        Ok(Self {
+            connection: c,
+            _directory: directory,
+        })
     }
     /// Open an existing schema-1 registry without creating or migrating any files.
     pub fn open_readonly(dir: &Path) -> Result<Option<Self>, StorageError> {
@@ -129,13 +302,19 @@ impl Registry {
             Some(1) => {}
             Some(_) => return Err(StorageError::SchemaNeedsMigration),
         }
+        let directory = secure_dir::prepare(dir, false)?
+            .ok_or(StorageError::UnsafeDirectory("data directory disappeared"))?;
         let c = Connection::open_with_flags(
-            dir.join("rit.sqlite3"),
+            directory.path.join("rit.sqlite3"),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", "ON")?;
-        Ok(Some(Self { connection: c }))
+        preflight(validate_marked(&c))?;
+        Ok(Some(Self {
+            connection: c,
+            _directory: directory,
+        }))
     }
     /// Register or update a location atomically, preserving repository identity and existing name unless explicitly supplied.
     pub fn register(
@@ -253,7 +432,10 @@ impl Registry {
 /// Inspect an existing database without creating or migrating it.
 /// Returns `None` when it has not been initialized.
 pub fn diagnose(dir: &Path) -> Result<Option<i64>, StorageError> {
-    let path = dir.join("rit.sqlite3");
+    let Some(directory) = secure_dir::prepare(dir, false)? else {
+        return Ok(None);
+    };
+    let path = directory.path.join("rit.sqlite3");
     match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(StorageError::Io(e)),
@@ -264,15 +446,8 @@ pub fn diagnose(dir: &Path) -> Result<Option<i64>, StorageError> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     c.busy_timeout(Duration::from_secs(5))?;
-    let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if v > 1 {
-        return Err(StorageError::FutureSchema(v));
-    }
-    let ok: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-    if ok != "ok" {
-        return Err(StorageError::Sql(rusqlite::Error::InvalidQuery));
-    }
-    Ok(Some(v))
+    preflight(validate_marked(&c))?;
+    Ok(Some(1))
 }
 
 #[cfg(test)]
@@ -280,6 +455,15 @@ mod connection_tests {
     use super::*;
     #[test]
     fn actual_registry_connection_enforces_foreign_keys() {
+        #[cfg(target_os = "linux")]
+        let tmp = {
+            use std::os::unix::fs::PermissionsExt;
+            tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap()
+        };
+        #[cfg(not(target_os = "linux"))]
         let tmp = tempfile::tempdir().unwrap();
         let registry = Registry::open(tmp.path()).unwrap();
         let enabled: i64 = registry

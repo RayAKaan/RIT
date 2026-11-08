@@ -4,7 +4,7 @@ mod cli;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand, RepositoryCommand};
+use cli::{Cli, Command, ConfigCommand, RepositoryCommand, StorageCommand};
 use rit_core::{
     config::{self, ConfigFile, Overrides},
     error::ConfigError,
@@ -78,6 +78,31 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             cli.data_dir.as_deref(),
         )
         .map_err(|e| (RUNTIME_FAILURE, e)),
+        Command::Storage { command } => {
+            let data = rit_storage::data_dir(cli.data_dir.as_deref())
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            match command {
+                StorageCommand::Verify { json } => {
+                    let result =
+                        rit_storage::verify(&data).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    let info=result.map(|r| serde_json::json!({"application_id":r.application_id,"user_version":r.user_version,"marked_rit":r.marked_rit,"valid_legacy":r.valid_legacy}));
+                    output::value(
+                        &serde_json::json!({"schema_version":1,"storage":info}),
+                        json,
+                    )
+                    .map_err(|e| (RUNTIME_FAILURE, e))
+                }
+                StorageCommand::AdoptLegacy { confirm, json } => {
+                    rit_storage::adopt_legacy(&data, confirm)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    output::value(
+                        &serde_json::json!({"schema_version":1,"adopted":true}),
+                        json,
+                    )
+                    .map_err(|e| (RUNTIME_FAILURE, e))
+                }
+            }
+        }
         Command::Inspect { path, json } => {
             let git =
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;

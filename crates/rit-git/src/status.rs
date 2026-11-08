@@ -34,12 +34,24 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Status, GitError> {
         }
         if let Some(h) = r.strip_prefix(b"# ") {
             if let Some(v) = h.strip_prefix(b"branch.oid ") {
+                if v.is_empty() || status.oid.is_some() {
+                    return Err(GitError::Parse("duplicate or empty branch oid"));
+                }
                 status.oid = Some(text(v)?);
             } else if let Some(v) = h.strip_prefix(b"branch.head ") {
+                if v.is_empty() || status.branch.is_some() {
+                    return Err(GitError::Parse("duplicate or empty branch name"));
+                }
                 status.branch = Some(text(v)?);
             } else if let Some(v) = h.strip_prefix(b"branch.upstream ") {
+                if v.is_empty() || status.upstream.is_some() {
+                    return Err(GitError::Parse("duplicate or empty upstream"));
+                }
                 status.upstream = Some(text(v)?);
             } else if let Some(v) = h.strip_prefix(b"branch.ab ") {
+                if status.ahead.is_some() || status.behind.is_some() {
+                    return Err(GitError::Parse("duplicate ahead/behind"));
+                }
                 let s = text(v)?;
                 let mut i = s.split(' ');
                 let a = i
@@ -64,6 +76,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Status, GitError> {
             Some(b'?') => {
                 let p = r
                     .strip_prefix(b"? ")
+                    .filter(|p| !p.is_empty())
                     .ok_or(GitError::Parse("untracked path"))?;
                 Change {
                     kind: "untracked".into(),
@@ -80,7 +93,16 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Status, GitError> {
                     _ => ("unmerged", 11),
                 };
                 let f = split_fields(r, n)?;
-                if f[1].len() != 2 || f[2].len() != 4 {
+                if f[0].len() != 1
+                    || f[1].len() != 2
+                    || !f[1].iter().all(|b| b".MADRCUT".contains(b))
+                    || f[2].len() != 4
+                    || !(f[2] == b"N..."
+                        || (f[2][0] == b'S'
+                            && b".C".contains(&f[2][1])
+                            && b".M".contains(&f[2][2])
+                            && b".U".contains(&f[2][3])))
+                {
                     return Err(GitError::Parse("status flags"));
                 }
                 let original_path = if r[0] == b'2' {
@@ -123,5 +145,11 @@ mod tests {
     fn rejects_unknown_and_truncated() {
         assert!(parse(b"x bad\0").is_err());
         assert!(parse(b"? missing terminator").is_err());
+        assert!(parse(b"? \0").is_err());
+        assert!(parse(b"1x M. N... 100644 100644 100644 aa bb file\0").is_err());
+        assert!(parse(b"1 XX N... 100644 100644 100644 aa bb file\0").is_err());
+        assert!(parse(b"# branch.head main\0# branch.head other\0").is_err());
+        assert!(parse(b"# branch.oid \0").is_err());
+        assert!(parse(b"2 R. N... 100644 100644 100644 aa bb R100 name\0").is_err());
     }
 }

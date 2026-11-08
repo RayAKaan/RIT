@@ -274,3 +274,117 @@ fn listing_marks_a_removed_location_missing() {
         "missing"
     );
 }
+#[test]
+fn repurposed_first_location_does_not_hide_valid_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("root");
+    let linked = temp.path().join("linked");
+    let data = temp.path().join("data");
+    fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=x",
+            "-c",
+            "user.email=x@y",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+        ],
+    );
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let first = json(&rit(&data, &["init", linked.to_str().unwrap(), "--json"]));
+    let id = first["repository"]["id"].as_str().unwrap();
+    json(&rit(&data, &["init", root.to_str().unwrap(), "--json"]));
+    fs::remove_dir_all(&linked).unwrap();
+    fs::create_dir(&linked).unwrap();
+    git(&linked, &["init", "-q"]);
+    let info = json(&rit(&data, &["repository", "info", id, "--json"]));
+    assert_eq!(info["inspection"]["location"], root.to_str().unwrap());
+    assert_eq!(info["repository"]["id"], id);
+}
+#[test]
+fn concurrent_initialization_and_same_repository_registration_are_idempotent() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let data = temp.path().join("data");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    let mut children = Vec::new();
+    for _ in 0..8 {
+        children.push(
+            Command::new(env!("CARGO_BIN_EXE_rit"))
+                .arg("--data-dir")
+                .arg(&data)
+                .args(["init", repo.to_str().unwrap(), "--json"])
+                .env_remove("RIT_GIT_EXECUTABLE")
+                .env_remove("RIT_LOG_LEVEL")
+                .env_remove("RIT_LOG_FORMAT")
+                .env("XDG_CONFIG_HOME", temp.path().join("config"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    let mut ids = Vec::new();
+    let mut created = 0;
+    for child in children {
+        let out = child.wait_with_output().unwrap();
+        let result = json(&out);
+        ids.push(result["repository"]["id"].as_str().unwrap().to_owned());
+        created += usize::from(result["created"].as_bool().unwrap());
+    }
+    assert_eq!(created, 1);
+    assert!(ids.iter().all(|id| id == &ids[0]));
+    let listing = json(&rit(&data, &["repository", "list", "--json"]));
+    assert_eq!(listing["repositories"].as_array().unwrap().len(), 1);
+}
+#[cfg(unix)]
+#[test]
+fn valid_git_environment_override_is_used() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    let exe = Command::new("git").arg("--exec-path").output().unwrap();
+    assert!(exe.status.success());
+    // An absolute executable name makes this test independent of relative PATH entries.
+    let git_path = Command::new("which").arg("git").output().unwrap();
+    assert!(git_path.status.success());
+    let git_path = String::from_utf8(git_path.stdout).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args(["inspect", repo.to_str().unwrap(), "--json"])
+        .env("RIT_GIT_EXECUTABLE", git_path.trim())
+        .env_remove("RIT_LOG_LEVEL")
+        .env_remove("RIT_LOG_FORMAT")
+        .env("XDG_CONFIG_HOME", temp.path().join("config"))
+        .output()
+        .unwrap();
+    assert_eq!(json(&out)["inspection"]["location"], repo.to_str().unwrap());
+}
+#[test]
+fn rejects_data_directory_which_contains_repository() {
+    let temp = TempDir::new().unwrap();
+    let data = temp.path().join("data");
+    let repo = data.join("repo");
+    fs::create_dir(&data).unwrap();
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    let out = rit(&data, &["init", repo.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(!data.join("rit.sqlite3").exists());
+}

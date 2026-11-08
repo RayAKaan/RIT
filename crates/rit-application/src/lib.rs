@@ -52,18 +52,18 @@ impl Repositories {
     ) -> Result<(Repository, bool), ApplicationError> {
         let ins = self.inspect(path)?;
         let data = resolve_future_path(&self.data_dir)?;
-        if data.starts_with(&ins.location)
-            || data.starts_with(&ins.common_git_dir)
-            || data.starts_with(&ins.git_dir)
+        if [&ins.location, &ins.common_git_dir, &ins.git_dir]
+            .iter()
+            .any(|p| data.starts_with(p) || Path::new(p).starts_with(&data))
         {
             return Err(ApplicationError::DataInsideRepository);
         }
         Ok(Registry::open(&self.data_dir)?.register(&ins, name)?)
     }
-    /// List records without invoking Git.
-    pub fn list(&self) -> Result<Vec<Repository>, ApplicationError> {
+    /// List records and their current filesystem-only path status without invoking Git.
+    pub fn list(&self) -> Result<Vec<RepositoryListing>, ApplicationError> {
         match Registry::open_readonly(&self.data_dir)? {
-            Some(registry) => Ok(registry.list()?),
+            Some(registry) => Ok(annotate_locations(registry.list()?)),
             None => Ok(Vec::new()),
         }
     }
@@ -84,20 +84,24 @@ impl Repositories {
     /// Inspect a registered repository at the selected or a still-existing location.
     pub fn live(&self, selector: &str) -> Result<(Repository, Inspection), ApplicationError> {
         let r = self.find(selector)?;
-        let path = if selector.parse::<RepositoryId>().is_ok() {
-            r.locations
-                .iter()
-                .find(|l| Path::new(&l.path).is_dir())
-                .map(|l| PathBuf::from(&l.path))
-                .ok_or(ApplicationError::StaleLocation)?
+        if selector.parse::<RepositoryId>().is_ok() {
+            // Stored order is stable. A missing, inaccessible, repurposed or otherwise
+            // invalid location cannot mask a later location that still matches.
+            for location in &r.locations {
+                if let Ok(ins) = self.git.inspect(Path::new(&location.path))
+                    && ins.common_git_dir == r.common_git_dir
+                {
+                    return Ok((r, ins));
+                }
+            }
+            Err(ApplicationError::StaleLocation)
         } else {
-            PathBuf::from(selector)
-        };
-        let ins = self.git.inspect(&path)?;
-        if ins.common_git_dir != r.common_git_dir {
-            return Err(ApplicationError::StaleLocation);
+            let ins = self.git.inspect(Path::new(selector))?;
+            if ins.common_git_dir != r.common_git_dir {
+                return Err(ApplicationError::StaleLocation);
+            }
+            Ok((r, ins))
         }
-        Ok((r, ins))
     }
 }
 // Resolve the nearest existing ancestor to catch symlinks, even before a new directory exists.

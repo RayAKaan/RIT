@@ -40,6 +40,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Inspect or explicitly adopt a legacy local registry.
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommand,
+    },
     /// Register an existing Git repository; does not run git init.
     Init {
         /// Repository directory (default current directory).
@@ -101,4 +106,21 @@ pub enum RepositoryCommand {
 pub enum ConfigCommand {
     /// Validate the effective configuration without modifying files.
     Validate,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StorageCommand {
+    /// Inspect application ID and legacy schema without modifying the database.
+    Verify {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Adopt an exact unmarked Phase 2 schema after taking a backup.
+    AdoptLegacy {
+        /// Confirm that this database is yours and was backed up.
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
