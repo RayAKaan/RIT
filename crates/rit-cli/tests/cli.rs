@@ -4069,3 +4069,225 @@ fn clean_merge_reports_advisory_cross_file_changed_dependency_evidence() {
     assert_eq!(git(&left, &["rev-parse", "HEAD"]), l);
     assert_eq!(git(&right, &["rev-parse", "HEAD"]), r);
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn checkpoint_path_budget_can_capture_more_than_v5_default_without_changing_source() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        text(&o.stdout)
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("base"), "base\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "many",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    for i in 0..501 {
+        std::fs::write(work.join(format!("file{i:03}")), b"").unwrap();
+    }
+    let before = git(&work, &["ls-files", "--stage"]);
+    let default = run(
+        &[
+            "checkpoint",
+            "create",
+            "--repo",
+            rp,
+            "--workspace",
+            wid,
+            "--include-untracked",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!default.status.success());
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--include-untracked",
+        "--max-paths",
+        "600",
+        "--json",
+    ]);
+    assert_eq!(
+        c["checkpoint"]["manifest"]["worktree"]
+            .as_array()
+            .unwrap()
+            .len(),
+        502
+    );
+    assert_eq!(
+        c["checkpoint"]["manifest"]["capture_limits"]["max_paths"],
+        600
+    );
+    let cid = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    let verify = cli(&["checkpoint", "verify", cid, "--repo", rp, "--json"]);
+    assert_eq!(verify["index_stage_consistency"], "passed");
+    assert_eq!(git(&work, &["ls-files", "--stage"]), before);
+    assert!(work.join("file500").is_file());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn v5_schema_two_checkpoints_remain_verifiable_and_recoverable() {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str], input: Option<&[u8]>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if input.is_some() {
+            cmd.stdin(std::process::Stdio::piped());
+        }
+        let mut child = cmd.spawn().unwrap();
+        if let Some(bytes) = input {
+            child.stdin.take().unwrap().write_all(bytes).unwrap()
+        }
+        let o = child.wait_with_output().unwrap();
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        text(&o.stdout).trim().to_owned()
+    };
+    git(&repo, &["init", "-q"], None);
+    std::fs::write(repo.join("file"), "base\n").unwrap();
+    git(&repo, &["add", "."], None);
+    git(&repo, &["commit", "-qm", "base"], None);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "legacy",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("file"), "captured\n").unwrap();
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let id = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    let old = c["checkpoint"]["object"]["hex"].as_str().unwrap();
+    let mut manifest = c["checkpoint"]["manifest"].clone();
+    manifest["schema_version"] = serde_json::json!(2);
+    for key in ["capture_limits", "created_at", "include_untracked"] {
+        manifest.as_object_mut().unwrap().remove(key);
+    }
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let manifest_oid = git(
+        &repo,
+        &["hash-object", "-w", "--stdin"],
+        Some(&manifest_bytes),
+    );
+    let tree = git(&repo, &["ls-tree", old], None);
+    let mut entries = String::new();
+    for line in tree.lines() {
+        if line.ends_with("\tmanifest.json") {
+            entries.push_str(&format!("100644 blob {manifest_oid}\tmanifest.json\n"));
+        } else {
+            entries.push_str(line);
+            entries.push('\n');
+        }
+    }
+    let newtree = git(&repo, &["mktree"], Some(entries.as_bytes()));
+    let parent = git(&repo, &["rev-parse", &format!("{old}^1")], None);
+    let commit = git(
+        &repo,
+        &[
+            "commit-tree",
+            &newtree,
+            "-p",
+            &parent,
+            "-m",
+            "v5 schema fixture",
+        ],
+        None,
+    );
+    git(
+        &repo,
+        &[
+            "update-ref",
+            &format!("refs/rit/content-checkpoints/{id}"),
+            &commit,
+            old,
+        ],
+        None,
+    );
+    let verified = cli(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    assert_eq!(verified["checkpoint"]["manifest"]["schema_version"], 2);
+    let dest = d.path().join("legacy-recovery");
+    cli(&[
+        "checkpoint",
+        "restore",
+        id,
+        "--repo",
+        rp,
+        "--to",
+        dest.to_str().unwrap(),
+        "--yes",
+        "--accept-incomplete",
+        "--json",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("file")).unwrap(),
+        "captured\n"
+    );
+}
