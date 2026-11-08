@@ -34,6 +34,8 @@ struct Doctor<'a> {
     configuration: ConfigStatus,
     git: GitStatus,
     storage: StorageStatus,
+    overall_status: &'static str,
+    security_gate: &'static str,
 }
 #[derive(Serialize)]
 struct ConfigStatus {
@@ -90,7 +92,7 @@ pub fn doctor(
                     error: None,
                 },
                 Ok(Some(1)) => StorageStatus {
-                    status: "ok",
+                    status: "schema_readable_security_unverified",
                     path: display,
                     schema_version: Some(1),
                     error: None,
@@ -137,6 +139,12 @@ pub fn doctor(
         },
         git,
         storage,
+        overall_status: if failed {
+            "unavailable"
+        } else {
+            "security_blocked"
+        },
+        security_gate: "blocked_phase_2_1",
     };
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -151,7 +159,7 @@ pub fn doctor(
 OS: {}
 Architecture: {}
 Configuration: {} ({})
-Logging: {:?} / {:?}\nGit: {} (executable {:?}, version {:?}, error {:?})\nStorage: {} (path {:?}, schema {:?}, error {:?})",
+Logging: {:?} / {:?}\nGit: {} (executable {:?}, version {:?}, error {:?})\nStorage: {} (path {:?}, schema {:?}, error {:?})\nOverall: {} (security gate: {})",
             report.rit_version,
             report.os,
             report.architecture,
@@ -166,7 +174,9 @@ Logging: {:?} / {:?}\nGit: {} (executable {:?}, version {:?}, error {:?})\nStora
             report.storage.status,
             report.storage.path,
             report.storage.schema_version,
-            report.storage.error
+            report.storage.error,
+            report.overall_status,
+            report.security_gate
         )
         .map_err(|e| format!("cannot write doctor output: {e}"))?;
     }

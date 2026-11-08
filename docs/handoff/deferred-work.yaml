@@ -121,7 +121,7 @@
       "evidence": "Existing adoption has no durable intent or automatic consistent backup",
       "root_cause": "Crash-safe identity binding and backup missing",
       "dependencies": [],
-      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "interim_behavior": "CLI adoption fails unavailable; existing public storage library adoption API remains unsafe and must not be used with valuable data.",
       "required_remediation": "Implement confirmed intent, SQLite backup API and recovery protocol",
       "acceptance_criteria": "Fault-injected adoption preserves data and verifies backup",
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",

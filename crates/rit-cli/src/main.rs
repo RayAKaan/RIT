@@ -92,15 +92,7 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     )
                     .map_err(|e| (RUNTIME_FAILURE, e))
                 }
-                StorageCommand::AdoptLegacy { confirm, json } => {
-                    rit_storage::adopt_legacy(&data, confirm)
-                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-                    output::value(
-                        &serde_json::json!({"schema_version":1,"adopted":true}),
-                        json,
-                    )
-                    .map_err(|e| (RUNTIME_FAILURE, e))
-                }
+                StorageCommand::AdoptLegacy { .. } => Err((RUNTIME_FAILURE, "operation unavailable: legacy adoption requires a verified identity-bound intent and SQLite-consistent backup".into())),
             }
         }
         Command::Task { .. }

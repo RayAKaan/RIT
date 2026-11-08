@@ -388,3 +388,21 @@ fn rejects_data_directory_which_contains_repository() {
     assert!(!out.status.success());
     assert!(!data.join("rit.sqlite3").exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_never_calls_schema_readability_security_health() {
+    let d = TempDir::new().unwrap();
+    let root = d.path().join("repo");
+    let data = d.path().join("data");
+    fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    json(&rit(&data, &["init", root.to_str().unwrap(), "--json"]));
+    let report = json(&rit(&data, &["doctor", "--json"]));
+    assert_eq!(
+        report["storage"]["status"],
+        "schema_readable_security_unverified"
+    );
+    assert_eq!(report["overall_status"], "security_blocked");
+    assert_eq!(report["security_gate"], "blocked_phase_2_1");
+}

@@ -1,6 +1,6 @@
 # RIT user guide — development preview
 
-RIT is not production-ready. Do not rely on the experimental registry for valuable data: hot-journal recovery and substituted-database acceptance tests fail, and the existing registry commands do not authenticate callers. In particular, legacy adoption does not implement verified backup or crash-safe intent. Never delete SQLite journals as a workaround.
+RIT is not production-ready. Do not rely on the experimental registry for valuable data: hot-journal recovery and substituted-database acceptance tests fail, and the existing registry commands do not authenticate callers. The CLI legacy-adoption command is disabled; the underlying Rust library function still lacks verified backup and crash-safe intent and must not be used on valuable data. Never delete SQLite journals as a workaround.
 
 Install the pinned Rust toolchain and Git, then `cargo build --locked --workspace`. Use `rit doctor --json` and `rit config validate` for diagnostics. `rit inspect PATH --json` inspects Git without opening the registry. `rit repo branches PATH --json`, `rit repo refs PATH --json`, and `rit repo log PATH --limit 20 --json` read Git history/ref observations without registry access. These commands are local OS-user reads, not authenticated RIT services; use only with repositories you are authorized to inspect. Git data can change concurrently and results can be stale or incomplete, particularly in shallow clones.
 

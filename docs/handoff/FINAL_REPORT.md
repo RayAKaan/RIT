@@ -30,7 +30,7 @@ Not run: 40-step end-to-end workflow, real RIT-managed five-workspace lifecycle,
 
 ## Security and remediation
 
-The existing experimental registry and explicit legacy-adoption operation are not authenticated and cannot independently verify database identity; avoid valuable data. All new security-dependent operations remain unavailable. Do not delete hot journals. Follow `LOCAL_AGENT_REMEDIATION_REPORT.md`, `deferred-work.yaml`, the threat model and Phase 2.1 report for exact ordering, evidence and acceptance requirements. A worktree is not a sandbox; a hash chain needs a protected anchor.
+The existing experimental registry and legacy-adoption library API are not authenticated and cannot independently verify database identity; avoid valuable data. The legacy-adoption CLI now fails closed, but the underlying library API remains unsafe and experimental. All new security-dependent operations remain unavailable. Do not delete hot journals. Follow `LOCAL_AGENT_REMEDIATION_REPORT.md`, `deferred-work.yaml`, the threat model and Phase 2.1 report for exact ordering, evidence and acceptance requirements. A worktree is not a sandbox; a hash chain needs a protected anchor.
 
 ## History and delivery
 

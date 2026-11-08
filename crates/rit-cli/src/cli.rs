@@ -189,7 +189,7 @@ pub enum StorageCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Adopt an exact unmarked Phase 2 schema after taking a backup.
+    /// Adopt a legacy schema (currently unavailable; backup and crash safety are not verified).
     AdoptLegacy {
         /// Confirm that this database is yours and was backed up.
         #[arg(long)]

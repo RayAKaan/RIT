@@ -54,6 +54,8 @@ fn doctor_and_json() {
     assert_eq!(report["schema_version"], 2);
     assert_eq!(report["git"]["status"], "ok");
     assert_eq!(report["storage"]["status"], "not_initialized");
+    assert_eq!(report["security_gate"], "blocked_phase_2_1");
+    assert_eq!(report["overall_status"], "security_blocked");
     assert_eq!(report["configuration"]["status"], "valid");
     assert_eq!(report["configuration"]["file"], "missing_using_defaults");
     assert_eq!(report["rit_version"], env!("CARGO_PKG_VERSION"));
@@ -229,4 +231,20 @@ fn read_only_git_refs_and_log_do_not_open_registry() {
         }
         assert!(!data.exists());
     }
+}
+
+#[test]
+fn legacy_adoption_cli_fails_closed_without_creating_storage() {
+    let d = tempfile::tempdir().unwrap();
+    let data = d.path().join("missing");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .arg("--data-dir")
+        .arg(&data)
+        .args(["storage", "adopt-legacy", "--confirm"])
+        .env("XDG_CONFIG_HOME", d.path().join("config"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("legacy adoption requires"));
+    assert!(!data.exists());
 }
