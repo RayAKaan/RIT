@@ -1488,3 +1488,278 @@ fn content_checkpoint_captures_staged_raw_worktree_untracked_ignored_and_links_w
         "unstaged\n"
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn submission_builds_real_detached_candidate_without_publishing_and_reconciles_staleness() {
+    let d = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    fn git(p: &std::path::Path, args: &[&str]) -> String {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(p)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "{:?}: {}",
+            args,
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap().trim().to_string()
+    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["config", "user.email", "test@example.invalid"]);
+    std::fs::write(repo.join("base.py"), "value = 1\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let wp = work.to_str().unwrap();
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{a:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        wp,
+        "--name",
+        "source",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(
+        work.join("feature.py"),
+        "from base import value\nresult = value\n",
+    )
+    .unwrap();
+    let dirty = run(
+        &[
+            "submission",
+            "create",
+            wid,
+            "--repo",
+            rp,
+            "--target",
+            "refs/heads/main",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!dirty.status.success());
+    assert!(text(&dirty.stderr).contains("clean workspace"));
+    git(&work, &["add", "feature.py"]);
+    git(&work, &["commit", "-qm", "feature"]);
+    let source = git(&work, &["rev-parse", "HEAD"]);
+    let target = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\ntouch '{}'\n",
+            d.path().join("executed-hook").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let receipt = cli(&[
+        "submission",
+        "create",
+        wid,
+        "--repo",
+        rp,
+        "--target",
+        "refs/heads/main",
+        "--json",
+    ]);
+    let sub = &receipt["receipt"]["submission"];
+    let sid = sub["id"].as_str().unwrap();
+    assert_eq!(sub["source_commit"]["hex"], source);
+    assert_eq!(sub["target_commit"]["hex"], target);
+    assert!(
+        sub["changed_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "feature.py")
+    );
+    assert!(receipt["receipt"]["dependency_analysis"].is_object());
+    let candidate = d.path().join("candidate");
+    let cp = candidate.to_str().unwrap();
+    let output = cli(&[
+        "submission",
+        "candidate",
+        sid,
+        "--repo",
+        rp,
+        "--path",
+        cp,
+        "--json",
+    ]);
+    let result = &output["result"];
+    assert_eq!(result["status"], "created");
+    assert_eq!(result["candidate"]["observation"], "present");
+    assert_eq!(result["candidate"]["target_moved"], false);
+    assert_eq!(
+        result["object_check"],
+        "passed (Git fsck; auxiliary indexes excluded)"
+    );
+    assert!(result["dependency_analysis"].is_object());
+    assert!(result["execution"].as_str().unwrap().starts_with("not run"));
+    let cid = result["candidate"]["candidate"]["id"].as_str().unwrap();
+    let commit = result["candidate"]["candidate"]["commit"]["hex"]
+        .as_str()
+        .unwrap();
+    assert_eq!(git(&candidate, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(git(&candidate, &["rev-parse", "HEAD^1"]), target);
+    assert_eq!(git(&candidate, &["rev-parse", "HEAD^2"]), source);
+    assert_eq!(
+        std::fs::read_to_string(candidate.join("feature.py")).unwrap(),
+        "from base import value\nresult = value\n"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), target);
+    assert_eq!(git(&work, &["rev-parse", "HEAD"]), source);
+    assert_eq!(git(&work, &["status", "--porcelain"]), "");
+    let listed = cli(&["submission", "list", "--repo", rp, "--json"]);
+    assert_eq!(listed["submissions"][0]["id"], sid);
+    assert!(!d.path().join("executed-hook").exists());
+    std::fs::remove_file(&hook).unwrap();
+    git(&repo, &["commit", "--allow-empty", "-qm", "move target"]);
+    let candidates = cli(&["submission", "candidates", "--repo", rp, "--json"]);
+    assert_eq!(candidates["candidates"][0]["target_moved"], true);
+    let stale = run(
+        &[
+            "submission",
+            "candidate",
+            sid,
+            "--repo",
+            rp,
+            "--path",
+            d.path().join("stale").to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!stale.status.success());
+    assert!(text(&stale.stderr).contains("target moved"));
+    assert!(!d.path().join("stale").exists());
+    git(
+        &repo,
+        &[
+            "update-ref",
+            "-d",
+            &format!("refs/rit/candidates/{cid}/commit"),
+        ],
+    );
+    let observed = cli(&["submission", "candidates", "--repo", rp, "--json"]);
+    assert_eq!(
+        observed["candidates"][0]["observation"],
+        "candidate_ref_mismatch"
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn conflicting_submission_reports_git_stages_and_creates_no_candidate() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("app.py"), "def f():\n    return 0\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("source");
+    let wp = work.to_str().unwrap();
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        wp,
+        "--name",
+        "source",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("app.py"), "def f():\n    return 1\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "source"]);
+    std::fs::write(repo.join("app.py"), "def f():\n    return 2\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "target"]);
+    let target = git(&repo, &["rev-parse", "HEAD"]);
+    let source = git(&work, &["rev-parse", "HEAD"]);
+    let sub = cli(&[
+        "submission",
+        "create",
+        wid,
+        "--repo",
+        rp,
+        "--target",
+        "refs/heads/main",
+        "--json",
+    ]);
+    let sid = sub["receipt"]["submission"]["id"].as_str().unwrap();
+    let path = d.path().join("candidate");
+    let out = cli(&[
+        "submission",
+        "candidate",
+        sid,
+        "--repo",
+        rp,
+        "--path",
+        path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(out["result"]["status"], "conflicted");
+    assert_eq!(
+        out["result"]["conflict_report"]["simulation"]["has_conflicts"],
+        true
+    );
+    assert!(
+        !out["result"]["conflict_report"]["simulation"]["stages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!path.exists());
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), target);
+    assert_eq!(git(&work, &["rev-parse", "HEAD"]), source);
+    assert!(
+        cli(&["submission", "candidates", "--repo", rp, "--json"])["candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}

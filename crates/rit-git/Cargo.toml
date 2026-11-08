@@ -12,6 +12,7 @@ thiserror.workspace = true
 command-group = "5.0.1"
 tempfile = "3.24.0"
 serde_json = "1.0"
+serde.workspace = true
 sha2 = "0.10.9"
 
 [dev-dependencies]

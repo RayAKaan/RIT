@@ -849,6 +849,15 @@ impl Git {
         left: &str,
         right: &str,
     ) -> Result<rit_core::conflict::MergeSimulation, GitError> {
+        self.simulate_merge_mode(repo, left, right, false)
+    }
+    fn simulate_merge_mode(
+        &self,
+        repo: &Path,
+        left: &str,
+        right: &str,
+        persist_tree: bool,
+    ) -> Result<rit_core::conflict::MergeSimulation, GitError> {
         use rit_core::{
             conflict::{MergeMessage, MergeSimulation, MergeStage},
             git_object::ObjectId,
@@ -944,20 +953,28 @@ impl Git {
             Ok(_) | Err(GitError::Exit { code: Some(1), .. }) => (),
             Err(e) => return Err(e),
         }
-        let object_dir = Path::new(&ins.common_git_dir)
-            .join("objects")
-            .canonicalize()
-            .map_err(GitError::Launch)?;
-        let object_text = object_dir.to_str().ok_or(GitError::NonUnicode)?;
-        if object_text.contains('\n') || object_text.contains('\r') {
-            return Err(GitError::Unavailable("unsupported object directory path"));
+        let tmp = if persist_tree {
+            None
+        } else {
+            Some(tempfile::tempdir().map_err(GitError::Launch)?)
+        };
+        let mut env = Vec::new();
+        if let Some(tmp) = &tmp {
+            let object_dir = Path::new(&ins.common_git_dir)
+                .join("objects")
+                .canonicalize()
+                .map_err(GitError::Launch)?;
+            let object_text = object_dir.to_str().ok_or(GitError::NonUnicode)?;
+            if object_text.contains('\n') || object_text.contains('\r') {
+                return Err(GitError::Unavailable("unsupported object directory path"));
+            }
+            let objects = tmp.path().join("objects");
+            std::fs::create_dir_all(objects.join("info")).map_err(GitError::Launch)?;
+            std::fs::create_dir(objects.join("pack")).map_err(GitError::Launch)?;
+            std::fs::write(objects.join("info/alternates"), format!("{object_text}\n"))
+                .map_err(GitError::Launch)?;
+            env.push(("GIT_OBJECT_DIRECTORY", objects.into_os_string()));
         }
-        let tmp = tempfile::tempdir().map_err(GitError::Launch)?;
-        let objects = tmp.path().join("objects");
-        std::fs::create_dir_all(objects.join("info")).map_err(GitError::Launch)?;
-        std::fs::create_dir(objects.join("pack")).map_err(GitError::Launch)?;
-        std::fs::write(objects.join("info/alternates"), format!("{object_text}\n"))
-            .map_err(GitError::Launch)?;
         let args = [
             "-c",
             "core.hooksPath=/dev/null",
@@ -971,14 +988,8 @@ impl Git {
         .into_iter()
         .map(OsString::from)
         .collect::<Vec<_>>();
-        let (out, code) = self.run_internal(
-            Some(&cwd),
-            &args,
-            "conflict merge",
-            &[("GIT_OBJECT_DIRECTORY", objects.as_os_str().into())],
-            true,
-            None,
-        )?;
+        let (out, code) =
+            self.run_internal(Some(&cwd), &args, "conflict merge", &env, true, None)?;
         if !out.ends_with(&[0]) {
             return Err(GitError::Parse("merge output terminator"));
         }
@@ -1498,7 +1509,7 @@ impl Git {
                 .iter()
                 .find(|w| w.branch.as_deref() == Some(&m.branch))
                 .cloned();
-            let observation = match &w {
+            let mut observation = match &w {
                 None => "missing",
                 Some(w) if w.path != m.path => "moved",
                 Some(w) if w.prunable => "prunable",
@@ -1512,6 +1523,9 @@ impl Git {
             } else {
                 None
             };
+            if observation == "present" && status.is_none() {
+                observation = "inspection_unavailable".into();
+            }
             observations.push(ManagedWorkspaceObservation {
                 manifest: m,
                 manifest_oid: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
@@ -1708,7 +1722,7 @@ impl Git {
         )?;
         let mut staged = Vec::new();
         let mut tracked = std::collections::BTreeSet::new();
-        let mut limitations=vec!["Non-atomic multi-file observation; it can become stale immediately".into(),"Ignored content excluded except explicitly selected files".into(),"LFS pointer blobs and observed raw worktree bytes do not establish LFS object availability".into()];
+        let mut limitations=vec!["Non-atomic multi-file observation; it can become stale immediately".into(),"Ignored content excluded except explicitly selected files".into(),"LFS pointer blobs and observed raw worktree bytes do not establish LFS object availability".into(),"POSIX metadata other than the executable bit, ACLs, xattrs and hardlink identity are not captured".into()];
         for row in staged_raw.split(|b| *b == 0).filter(|b| !b.is_empty()) {
             let tab = row
                 .iter()
@@ -2174,6 +2188,502 @@ impl Git {
             }
         }
         Ok(c)
+    }
+    fn write_json_ref<T: serde::Serialize>(
+        &self,
+        repo: &Path,
+        format: rit_core::git_object::ObjectFormat,
+        reference: &str,
+        value: &T,
+        old: &str,
+    ) -> Result<rit_core::git_object::ObjectId, GitError> {
+        let bytes =
+            serde_json::to_vec(value).map_err(|_| GitError::Parse("metadata serialization"))?;
+        if bytes.len() > 1_048_576 {
+            return Err(GitError::OutputLimit);
+        }
+        let oid = self.checkpoint_hash_blob(repo, format, &bytes)?;
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            reference,
+            oid.as_hex(),
+            old,
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(repo), &args, "workspace metadata ref")?;
+        Ok(oid)
+    }
+    fn resolve_commit(
+        &self,
+        repo: &Path,
+        format: rit_core::git_object::ObjectFormat,
+        revision: &str,
+    ) -> Result<rit_core::git_object::ObjectId, GitError> {
+        if revision.is_empty() || revision.len() > 256 || revision.contains('\0') {
+            return Err(GitError::Parse("invalid revision"));
+        }
+        let hex = self.query(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{revision}^{{commit}}"),
+            ],
+            "revision",
+        )?;
+        rit_core::git_object::ObjectId::new(format, &hex).map_err(GitError::Parse)
+    }
+    /// Record a clean managed workspace's committed source and target as unauthenticated Git metadata.
+    pub fn submission_create(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        target: &str,
+    ) -> Result<rit_core::submission::GitSubmission, GitError> {
+        use rit_core::submission::{GitSubmission, SubmissionId};
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "submissions not validated on this platform",
+            ));
+        }
+        if !target.starts_with("refs/heads/") || target.contains('\0') || target.len() > 256 {
+            return Err(GitError::Parse("target must be a full local branch ref"));
+        }
+        self.run(
+            Some(repo),
+            &["check-ref-format".into(), target.into()],
+            "workspace target ref",
+        )?;
+        let state = self.workspace_reconcile(repo)?;
+        let workspace = state
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id && w.observation == "present")
+            .ok_or(GitError::Unavailable("workspace not present and ready"))?;
+        let status = workspace
+            .status
+            .ok_or(GitError::Unavailable("workspace status unavailable"))?;
+        if !status.changes.is_empty() {
+            return Err(GitError::Unavailable(
+                "submit requires a clean workspace; commit or checkpoint uncommitted work first",
+            ));
+        }
+        let format = self.object_format(repo)?;
+        let source = self.resolve_commit(repo, format, &workspace.manifest.branch)?;
+        if workspace.worktree.as_ref().and_then(|w| w.head.as_ref()) != Some(&source) {
+            return Err(GitError::Unavailable(
+                "source branch moved during submission",
+            ));
+        }
+        let target_commit = self.resolve_commit(repo, format, target)?;
+        let args = [
+            "diff-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            workspace.manifest.base.as_hex(),
+            source.as_hex(),
+            "--",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let changed = self
+            .run(Some(repo), &args, "workspace submission diff")?
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+            .map(|b| {
+                std::str::from_utf8(b)
+                    .map(str::to_owned)
+                    .map_err(|_| GitError::NonUnicode)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sid = SubmissionId::new();
+        let item=GitSubmission{schema_version:1,id:sid,workspace:id,source_branch:workspace.manifest.branch,source_commit:source,base_commit:workspace.manifest.base,target_ref:target.into(),target_commit,changed_files:changed,scope:"committed source only; unauthenticated; ignored and later worktree changes excluded".into()};
+        let reference = format!("refs/rit/submissions/{sid}/manifest");
+        let zero = "0".repeat(item.source_commit.as_hex().len());
+        self.write_json_ref(repo, format, &reference, &item, &zero)?;
+        Ok(item)
+    }
+    /// Rediscover Git-ref-backed, unauthenticated submissions.
+    pub fn submission_list(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::submission::GitSubmission>, GitError> {
+        use rit_core::submission::GitSubmission;
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/submissions/",
+            ],
+            "submission refs",
+        )?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 || f[2] != "blob" {
+                return Err(GitError::Parse("submission ref"));
+            }
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace submission read",
+            )?;
+            if raw.len() > 1_048_576 {
+                return Err(GitError::OutputLimit);
+            }
+            let item: GitSubmission =
+                serde_json::from_slice(&raw).map_err(|_| GitError::Parse("submission manifest"))?;
+            if item.schema_version != 1
+                || f[0] != format!("refs/rit/submissions/{}/manifest", item.id)
+                || item.source_branch != format!("refs/heads/rit/workspaces/{}", item.workspace)
+                || !item.target_ref.starts_with("refs/heads/")
+                || item.source_commit.algorithm() != format
+                || item.target_commit.algorithm() != format
+                || item.base_commit.algorithm() != format
+            {
+                return Err(GitError::Parse("submission claims"));
+            }
+            self.run(
+                Some(repo),
+                &["check-ref-format".into(), item.target_ref.as_str().into()],
+                "workspace submission validate",
+            )?;
+            for p in &item.changed_files {
+                validate_checkpoint_path(p)?
+            }
+            result.push(item);
+        }
+        Ok(result)
+    }
+    /// Recheck submission source and target against live Git before further work.
+    pub fn submission_validate(
+        &self,
+        repo: &Path,
+        item: &rit_core::submission::GitSubmission,
+    ) -> Result<(), GitError> {
+        let format = self.object_format(repo)?;
+        let workspace = self
+            .workspace_reconcile(repo)?
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == item.workspace && w.observation == "present")
+            .ok_or(GitError::Unavailable("source workspace is unavailable"))?;
+        if workspace.manifest.branch != item.source_branch
+            || self.resolve_commit(repo, format, &item.source_branch)? != item.source_commit
+        {
+            return Err(GitError::Unavailable(
+                "source branch moved since submission",
+            ));
+        }
+        if self.resolve_commit(repo, format, &item.target_ref)? != item.target_commit {
+            return Err(GitError::Unavailable("target moved since submission"));
+        }
+        Ok(())
+    }
+    /// Construct a detached candidate worktree and merge commit without updating the target ref.
+    /// Candidate metadata is Git-backed coordination only; builds/tests and publication are disabled.
+    pub fn candidate_create(
+        &self,
+        repo: &Path,
+        submission: rit_core::submission::SubmissionId,
+        dest: &Path,
+    ) -> Result<rit_core::submission::CandidateObservation, GitError> {
+        use rit_core::{
+            git_object::ObjectId,
+            submission::{CandidateId, GitCandidate},
+        };
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "candidate construction not validated on this platform",
+            ));
+        }
+        let item = self
+            .submission_list(repo)?
+            .into_iter()
+            .find(|s| s.id == submission)
+            .ok_or(GitError::Parse("submission not found"))?;
+        let format = self.object_format(repo)?;
+        self.submission_validate(repo, &item)?;
+        let ins = self.inspect(repo)?;
+        let target_path = workspace_target(dest)?;
+        let source = Path::new(
+            ins.worktree
+                .as_deref()
+                .ok_or(GitError::Unavailable("bare candidate repository"))?,
+        );
+        let common = Path::new(&ins.common_git_dir);
+        if target_path.starts_with(source)
+            || source.starts_with(&target_path)
+            || target_path.starts_with(common)
+            || common.starts_with(&target_path)
+        {
+            return Err(GitError::Parse("candidate path overlaps repository"));
+        }
+        for w in self.worktrees(repo)? {
+            let p = Path::new(&w.path);
+            if target_path.starts_with(p) || p.starts_with(&target_path) {
+                return Err(GitError::Parse("candidate path overlaps worktree"));
+            }
+        }
+        let sim = self.simulate_merge_mode(
+            repo,
+            item.target_commit.as_hex(),
+            item.source_commit.as_hex(),
+            true,
+        )?;
+        if sim.has_conflicts {
+            return Err(GitError::Unavailable(
+                "candidate merge conflicts; run conflicts simulate",
+            ));
+        }
+        if self.resolve_commit(repo, format, &item.target_ref)? != item.target_commit {
+            return Err(GitError::Unavailable(
+                "target moved during candidate simulation",
+            ));
+        }
+        let args = [
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit-tree",
+            sim.ephemeral_tree.as_hex(),
+            "-p",
+            item.target_commit.as_hex(),
+            "-p",
+            item.source_commit.as_hex(),
+            "--no-gpg-sign",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let env = [
+            ("GIT_AUTHOR_NAME", OsString::from("RIT candidate")),
+            ("GIT_AUTHOR_EMAIL", OsString::from("candidate@rit.invalid")),
+            ("GIT_COMMITTER_NAME", OsString::from("RIT candidate")),
+            (
+                "GIT_COMMITTER_EMAIL",
+                OsString::from("candidate@rit.invalid"),
+            ),
+        ];
+        let (out, _) = self.run_internal(
+            Some(repo),
+            &args,
+            "workspace candidate commit",
+            &env,
+            false,
+            Some(b"RIT integration candidate (unauthenticated)\n"),
+        )?;
+        let commit = ObjectId::new(
+            format,
+            std::str::from_utf8(&out)
+                .map_err(|_| GitError::NonUnicode)?
+                .trim_end(),
+        )
+        .map_err(GitError::Parse)?;
+        let cid = CandidateId::new();
+        let mut c = GitCandidate {
+            schema_version: 1,
+            id: cid,
+            submission,
+            commit: commit.clone(),
+            source_commit: item.source_commit,
+            target_ref: item.target_ref,
+            target_commit: item.target_commit,
+            path: target_path.to_str().ok_or(GitError::NonUnicode)?.into(),
+            state: "provisioning".into(),
+            limitation: None,
+        };
+        let manifest_ref = format!("refs/rit/candidates/{cid}/manifest");
+        let commit_ref = format!("refs/rit/candidates/{cid}/commit");
+        let zero = "0".repeat(commit.as_hex().len());
+        let old = self.write_json_ref(repo, format, &manifest_ref, &c, &zero)?;
+        let result = (|| -> Result<(), GitError> {
+            let args = [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "update-ref",
+                commit_ref.as_str(),
+                commit.as_hex(),
+                zero.as_str(),
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            self.run(Some(repo), &args, "workspace candidate ref")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&target_path)
+                    .map_err(|source| GitError::Path {
+                        path: target_path.clone(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(GitError::Unavailable("candidate path unavailable"));
+            }
+            let args = vec![
+                "-c".into(),
+                "core.hooksPath=/dev/null".into(),
+                "worktree".into(),
+                "add".into(),
+                "--no-checkout".into(),
+                "--detach".into(),
+                target_path.as_os_str().into(),
+                commit.as_hex().into(),
+            ];
+            self.run(Some(repo), &args, "workspace candidate worktree")?;
+            let actual = self
+                .worktrees(repo)?
+                .into_iter()
+                .find(|w| w.path == c.path)
+                .ok_or(GitError::Parse("candidate worktree missing"))?;
+            if !actual.detached || actual.head.as_ref() != Some(&commit) {
+                return Err(GitError::Parse("candidate worktree mismatch"));
+            }
+            match self.workspace_materialize(&target_path, &commit) {
+                Ok(()) => c.state = "ready".into(),
+                Err(GitError::Unavailable(reason)) => {
+                    c.state = "no_checkout".into();
+                    c.limitation = Some(reason.into())
+                }
+                Err(e) => return Err(e),
+            }
+            self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
+            Ok(())
+        })();
+        if result.is_err() {
+            return Err(GitError::Provisioning {
+                id: cid.to_string(),
+            });
+        }
+        self.candidate_list(repo)?
+            .into_iter()
+            .find(|x| x.candidate.id == cid)
+            .ok_or(GitError::Parse("candidate missing after creation"))
+    }
+    /// Reconcile candidate manifests against Git worktrees and target branch values.
+    pub fn candidate_list(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::submission::CandidateObservation>, GitError> {
+        use rit_core::submission::{CandidateObservation, GitCandidate};
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/candidates/",
+            ],
+            "candidate refs",
+        )?;
+        let trees = self.worktrees(repo)?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 {
+                return Err(GitError::Parse("candidate ref"));
+            }
+            if f[0].ends_with("/commit") {
+                continue;
+            }
+            if f[2] != "blob" {
+                return Err(GitError::Parse("candidate manifest ref"));
+            }
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace candidate read",
+            )?;
+            let c: GitCandidate =
+                serde_json::from_slice(&raw).map_err(|_| GitError::Parse("candidate manifest"))?;
+            if c.schema_version != 1
+                || f[0] != format!("refs/rit/candidates/{}/manifest", c.id)
+                || c.commit.algorithm() != format
+                || c.source_commit.algorithm() != format
+                || c.target_commit.algorithm() != format
+                || !c.target_ref.starts_with("refs/heads/")
+                || !Path::new(&c.path).is_absolute()
+                || !matches!(c.state.as_str(), "ready" | "no_checkout" | "provisioning")
+            {
+                return Err(GitError::Parse("candidate claims"));
+            }
+            self.run(
+                Some(repo),
+                &["check-ref-format".into(), c.target_ref.as_str().into()],
+                "workspace candidate target",
+            )?;
+            let commit_ref = format!("refs/rit/candidates/{}/commit", c.id);
+            let ref_matches = refs.lines().any(|line| {
+                let fields = line.split('\0').collect::<Vec<_>>();
+                fields.len() == 3
+                    && fields[0] == commit_ref
+                    && fields[1] == c.commit.as_hex()
+                    && fields[2] == "commit"
+            });
+            let worktree = trees.iter().find(|w| w.path == c.path).cloned();
+            let observation = match &worktree {
+                None => "missing",
+                Some(_) if c.state == "provisioning" => "interrupted",
+                Some(_) if !ref_matches => "candidate_ref_mismatch",
+                Some(w) if !w.detached || w.head.as_ref() != Some(&c.commit) => "mismatch",
+                Some(_) if c.state == "no_checkout" => "no_checkout",
+                Some(_) => "present",
+            }
+            .to_string();
+            let target_moved = self
+                .resolve_commit(repo, format, &c.target_ref)
+                .map_or(true, |v| v != c.target_commit);
+            result.push(CandidateObservation {
+                candidate: c,
+                worktree,
+                observation,
+                target_moved,
+            });
+        }
+        Ok(result)
+    }
+    /// Run limited Git object-integrity checks without executing hooks or tests.
+    pub fn candidate_verify_objects(
+        &self,
+        repo: &Path,
+        commit: &rit_core::git_object::ObjectId,
+    ) -> Result<(), GitError> {
+        let args = [
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "core.multiPackIndex=false",
+            "-c",
+            "fsck.skipList=/dev/null",
+            "fsck",
+            "--strict",
+            "--no-reflogs",
+            "--no-dangling",
+            commit.as_hex(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(repo), &args, "workspace candidate fsck")?;
+        Ok(())
     }
     /// Create one commit-only Git checkpoint ref with an expected nonexistent old value.
     /// This does not capture or alter the index, working tree, untracked files or submodule contents.

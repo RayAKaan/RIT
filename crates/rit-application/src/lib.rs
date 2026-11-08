@@ -400,5 +400,6 @@ impl WorkspaceService {
 }
 /// Isolated Git conflict simulation with advisory structural evidence.
 pub mod conflicts;
+pub mod submissions;
 /// Native notification watcher; bounded and ephemeral, with reconciliation required.
 pub mod watcher;

@@ -6,7 +6,8 @@ mod output;
 use clap::Parser;
 use cli::{
     ActivityCommand, CheckpointCommand, Cli, Command, ConfigCommand, ConflictsCommand,
-    DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand, WorkspaceCommand,
+    DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand, SubmissionCommand,
+    WorkspaceCommand,
 };
 use rit_core::{
     config::{self, ConfigFile, Overrides},
@@ -266,6 +267,109 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
             output::value(
                 &serde_json::json!({"schema_version":1,"conflicts":report}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command:
+                SubmissionCommand::Create {
+                    workspace,
+                    repo: Some(repo),
+                    target: Some(target),
+                    json,
+                },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let id = workspace
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+            let receipt = service
+                .create(&repo, id, &target)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"receipt":receipt}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command:
+                SubmissionCommand::List {
+                    repo: Some(repo),
+                    json,
+                },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let items = service
+                .list(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"submissions":items}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command: SubmissionCommand::Inspect { id, repo, json },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid submission ID".into()))?;
+            let item = service
+                .list(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
+                .into_iter()
+                .find(|s| s.id == id)
+                .ok_or((RUNTIME_FAILURE, "submission not found".into()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"submission":item}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command:
+                SubmissionCommand::Candidate {
+                    id,
+                    repo,
+                    path,
+                    json,
+                },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid submission ID".into()))?;
+            let result = service
+                .candidate(&repo, id, &path)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"result":result}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command: SubmissionCommand::Candidates { repo, json },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let result = service
+                .candidates(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"candidates":result}),
                 json,
             )
             .map_err(|e| (RUNTIME_FAILURE, e))

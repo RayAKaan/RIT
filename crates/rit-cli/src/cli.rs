@@ -109,7 +109,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Submission and integration operations (currently unavailable).
+    /// Unauthenticated submissions and non-publishing candidates; approval is unavailable.
     Submission {
         #[command(subcommand)]
         command: SubmissionCommand,
@@ -421,7 +421,7 @@ pub enum AgentCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CheckpointCommand {
-    /// Create an explicitly limited committed-HEAD reference; no uncommitted work is captured.
+    /// Create a bounded raw-content workspace checkpoint or an explicit commit-only checkpoint.
     Create {
         #[arg(long)]
         repo: PathBuf,
@@ -439,14 +439,14 @@ pub enum CheckpointCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List commit-only checkpoint refs.
+    /// List content and commit-only checkpoints.
     List {
         #[arg(long)]
         repo: PathBuf,
         #[arg(long)]
         json: bool,
     },
-    /// Verify a commit-only checkpoint with Git fsck.
+    /// Verify content structure or a commit-only checkpoint with Git fsck.
     Verify {
         id: String,
         #[arg(long)]
@@ -472,10 +472,48 @@ pub enum CheckpointCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SubmissionCommand {
-    /// Create a submission; disabled.
-    Create { workspace: String },
-    /// List submissions; disabled.
-    List,
+    /// Submit a clean managed workspace's committed source against a local target ref.
+    Create {
+        workspace: String,
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List Git-ref-backed submissions.
+    List {
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a persisted submission.
+    Inspect {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Construct a detached candidate without updating the target.
+    Candidate {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List and reconcile candidate worktrees.
+    Candidates {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview integration; disabled.
     Preview { id: String },
     /// Publish a validated candidate; disabled.
