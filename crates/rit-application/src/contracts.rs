@@ -153,3 +153,12 @@ pub trait ConflictAnalyzer {
         theirs: &str,
     ) -> Result<rit_core::conflict::SemanticEvidence, CapabilityError>;
 }
+/// Dependency extractor boundary. Implementations must label evidence, revision and coverage.
+pub trait DependencyExtractor {
+    /// Extract an explicitly partial graph after authorization.
+    fn extract(
+        &self,
+        actor: &ActorContext,
+        workspace: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_core::impact::DependencyGraph, CapabilityError>;
+}

@@ -12,6 +12,8 @@ pub mod config;
 /// Read-only conflict evidence.
 pub mod conflict;
 pub mod error;
+/// Explicitly partial dependency graph and impact traversal.
+pub mod impact;
 /// Repository identity, inspection, and status domain types.
 pub mod repository;
 /// Pure identity, policy and audit models; not an authentication implementation.
