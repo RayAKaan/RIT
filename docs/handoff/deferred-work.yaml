@@ -184,7 +184,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Remote authentication",
-      "evidence": "Phase 1 dry-run push failed with missing GitHub credentials",
+      "evidence": "V6 read-only ls-remote succeeded; write permissions were not tested and no remote push or CI result is claimed.",
       "root_cause": "No authorized GitHub credentials",
       "dependencies": [],
       "interim_behavior": "Existing failure is preserved; do not delete database journals.",
@@ -253,7 +253,7 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Validated workspace operations and OS isolation",
-      "evidence": "V4 creates, lists, inspects, locks, unlocks and reconciles five genuinely RIT-created Git worktrees on Linux x86-64; safe no-checkout fallback works. Removal, reviewed OS isolation, native platforms and crash/race completeness remain unavailable.",
+      "evidence": "V6 removal preview and competing-create tests are implemented; removal stays disabled. Git-ref claims do not fence unrelated same-user processes or prove identity.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -278,7 +278,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Activity source and reconciliation",
-      "evidence": "V4 notify watcher observes concurrent edits in five RIT-created worktrees; bounded buffer, overflow and restart tested. Native stage/commit/branch events, durable history and non-Linux validation remain incomplete.",
+      "evidence": "V6 replaces the watcher restart channel and marks gaps; baseline failed once but isolated repetitions passed. Events remain bounded, lossy, process-local and unauthenticated.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -303,7 +303,7 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Safe capture, restore and retention",
-      "evidence": "V4 persists bounded raw index/worktree, opted-in untracked and selected ignored files, symlinks, executable bits, deletions and unmerged stages in reachable Git objects; integrity, GC and size refusal tested. Complete atomic capture, submodule/LFS, authenticated metadata and restore absent.",
+      "evidence": "V6 adds bounded schema-3 capture budgets, schema-2 compatibility test and recoverable selected extraction into an exclusively new directory. Capture remains incomplete/non-atomic; no automatic resume, in-place restore or retention collection.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-001"
@@ -328,7 +328,7 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Queue and atomic ref publication",
-      "evidence": "V4 Git-ref-backed submission and detached candidate merge commit/worktree, stale target detection and partial static validation work locally. No protected target publication, authentication, queue or crash-safe recovery.",
+      "evidence": "V6 fails candidate validation on stale target and actual Git fsck errors and preserves ID after partial creation; no authorized execution, review or publication.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -353,7 +353,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Semantic conflict analysis",
-      "evidence": "V4 real isolated-object merge-tree produces stages, messages, changed paths and partial syntax evidence without mutating source/target; merge drivers refused. Semantic and comprehensive case coverage remain incomplete.",
+      "evidence": "V6 adds advisory changed-importer/dependency evidence alongside actual Git merge results. Resolution and complete semantic analysis remain unavailable.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -377,7 +377,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Evidence extraction and impact coverage",
-      "evidence": "V4 snapshots selected commits/branches and bounded live workspace sources; partial Python/TS/Go resolution, evidence, cycles and impact work. Full language/symbol semantics and cache invalidation absent.",
+      "evidence": "V6 adds real stage-0 index blob graph and evidence-based heuristic impact/test links with concurrent recheck; non-atomic and incomplete.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -401,7 +401,7 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Authenticated privileged tool routes",
-      "evidence": "Ten read-only scoped stdio MCP views, including workspace/checkpoint/submission/candidate listing, pass local real-record tests. No authenticated or privileged routes.",
+      "evidence": "V6 exposes fifteen opt-in fixed-scope read-only MCP views with Python and TypeScript stdio interop; privileged routes and authenticated isolation remain disabled.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -426,7 +426,7 @@
       "severity": "high",
       "status": "deferred",
       "title": "Persistent collaboration and reliability suite",
-      "evidence": "Task/review types only; small V3 local microbenchmark measured read operations, but no production collaboration or reliability suite.",
+      "evidence": "V6 adds a real 35-step bounded diagnostic, with 9 blocked and 11 partial steps; durable tasks, authenticated audit and full workflow remain unavailable.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
@@ -450,7 +450,7 @@
       "severity": "high",
       "status": "deferred",
       "title": "Native support and release verification",
-      "evidence": "Linux build only; remote CI and native macOS/Windows unknown",
+      "evidence": "V6 adds a small reproducible Linux benchmark and local release build checks; native macOS/Windows security execution and remote CI/release remain unverified.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-004"
@@ -474,7 +474,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "TypeScript validation and interoperability",
-      "evidence": "Rust, Python and TypeScript clients exercise scoped stdio reads and denial, including new views; no authenticated product SDK or official conformance.",
+      "evidence": "V6 local strict TypeScript compilation and scoped Node interoperability pass, but package/distribution/full MCP conformance and authenticated behavior remain unverified.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-P10-001"
@@ -522,7 +522,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Full-history export contains temporary bytecode and environment paths",
-      "evidence": "Prior Phase 10 commit tracked generated bytecode containing a machine path; removed in next original commit. A separate export-only history rewrite removes bytecode and redacts paths while preserving topology; original history remains unaltered.",
+      "evidence": "Original history remains unchanged and includes historical bytecode/local paths. A separately rewritten selective-redaction export must be independently verified and is not the sole source of truth.",
       "root_cause": "Generated files were staged before ignore rules; historical evidence recorded environment paths.",
       "dependencies": [],
       "interim_behavior": "Export a sanitized, topology-preserving history with changed commit hashes and a separate commit map; keep original history private until reviewed.",
@@ -688,5 +688,12 @@
       "required_implementation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance.",
       "v5_update": "V5 records candidate provisioning steps and rediscovers SIGKILL interruption; no automatic recovery or cleanup, and no cross-ref atomicity."
     }
-  ]
+  ],
+  "v6_status": {
+    "overall_acceptance": "blocked",
+    "storage_gate": "preserved",
+    "full_workflow": "15 pass, 11 partial, 9 blocked",
+    "validation_environment": "Linux x86-64 only",
+    "next_phase": "trusted-storage design and adversarial native review precede production identity and publication"
+  }
 }
