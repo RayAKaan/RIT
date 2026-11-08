@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Snapshot activity reconciliation.
+pub mod activity;
 pub mod config;
 pub mod error;
 /// Repository identity, inspection, and status domain types.

@@ -101,3 +101,12 @@ pub trait ExecutionIsolationProvider {
         workspace: rit_core::workspace::WorkspaceId,
     ) -> Result<(), CapabilityError>;
 }
+/// Source of Git activity snapshots; consumers must handle lost events and re-observe Git.
+pub trait ActivityObserver {
+    /// Observe without capturing keystrokes; actor must already be authorized.
+    fn observe(
+        &self,
+        actor: &ActorContext,
+        workspace: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_core::activity::Observation, CapabilityError>;
+}
