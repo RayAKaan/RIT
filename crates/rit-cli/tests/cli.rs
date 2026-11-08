@@ -2714,3 +2714,98 @@ fn interrupted_candidate_is_discoverable_and_cancel_preserves_all_work() {
         commit
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn restore_never_overwrites_an_existing_index_lock() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("file"), "base\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("source");
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "source",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("file"), "capture\n").unwrap();
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let cid = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    let index = git(&work, &["rev-parse", "--git-path", "index"]);
+    let before = std::fs::read(&index).unwrap();
+    let dest = d.path().join("restore");
+    let wrapper = d.path().join("git-lock");
+    std::fs::write(&wrapper,"#!/bin/sh\nif [ -f \"$V5_DEST/.git\" ] && [ ! -f \"$V5_MARKER\" ]; then read -r g < \"$V5_DEST/.git\"; g=${g#gitdir: }; printf 'foreign lock data\\n' > \"$g/index.lock\"; printf x > \"$V5_MARKER\"; fi\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .env("V5_DEST", &dest)
+        .env("V5_MARKER", d.path().join("marker"))
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "checkpoint",
+            "restore",
+            cid,
+            "--repo",
+            rp,
+            "--to",
+            dest.to_str().unwrap(),
+            "--yes",
+            "--accept-incomplete",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let gitfile = std::fs::read_to_string(dest.join(".git")).unwrap();
+    let gitdir = std::path::Path::new(gitfile.trim().strip_prefix("gitdir: ").unwrap());
+    assert_eq!(
+        std::fs::read_to_string(gitdir.join("index.lock")).unwrap(),
+        "foreign lock data\n"
+    );
+    assert!(!gitdir.join("index").exists());
+    assert_eq!(std::fs::read(&index).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(work.join("file")).unwrap(),
+        "capture\n"
+    );
+}
