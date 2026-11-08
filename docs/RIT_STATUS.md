@@ -1,3 +1,5 @@
+> **V3 update:** This is a historical status snapshot. See [V3 final report](handoff/FINAL_REPORT.md) for current implementations and actual post-gate test failures.
+
 # RIT status — structural continuation, security gate blocked
 
 ## V2 audit and continuation — 2026-11-08

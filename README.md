@@ -6,8 +6,7 @@ RIT is a planned local-first coordination layer for humans and AI agents working
 
 ## Status
 
-Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and experimental SQLite-backed repository registration, without authentication or authorization. Avoid valuable data: the storage gate is failing. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, checkpoints, integration and collaboration have **models and disabled CLI/provider scaffolding only**; sandboxing and privileged operations are not implemented. A minimal MCP discovery-only stdio server, transport-injected SDK foundations, bounded Git history/ref reads, and Tree-sitter static-import extraction over supplied source exist. This is not a production release.
-
+Early development preview (`0.1.0-dev.1`), **not production ready**. V3 adds registry-independent Git inspection, partial committed-source dependency analysis, ephemeral Git activity polling, explicit Linux commit-only checkpoints, and opt-in scoped read-only stdio MCP. Managed workspaces, a real notification watcher, complete checkpoints/restoration, conflict simulation, integration, identity and authorization remain unavailable. The Phase 2.1 storage gate is blocked: writable registry and legacy adoption fail closed at the library boundary, and the experimental read-only registry is unauthenticated. See [the V3 handoff](docs/handoff/FINAL_REPORT.md).
 ## Build and run
 
 The tested environment is Linux x86-64 with stable Rust 1.99.1. macOS and Windows are CI candidates, not confirmed supported platforms until their checks run. Install Rust using rustup, then from the project root:
@@ -22,7 +21,7 @@ cargo run --locked -p rit-cli -- config validate
 cargo test --locked --workspace --all-targets
 ```
 
-The workspace test suite currently fails two mandatory Phase 2.1 security tests; see [status](docs/RIT_STATUS.md).
+The full workspace test suite currently has 21 failures after the fail-closed registry gate, including both unchanged mandatory Phase 2.1 security tests, which now fail during fixture setup. The pre-gate baseline had two failures at their intended assertions. See [the V3 handoff](docs/handoff/FINAL_REPORT.md).
 
 `cargo build` produces `target/debug/rit` (Windows: `target\debug\rit.exe`). No global install is required.
 
@@ -42,21 +41,13 @@ Configuration has no secret fields. Do not place credentials in it. Logs go to s
 
 `rit-cli` composes `rit-application`, `rit-git`, `rit-storage`, and `rit-core`; core has no CLI, Git, SQLite, or global logging dependency. [Architecture](docs/architecture/overview.md), [component map](docs/architecture/component-map.md), [testing](docs/development/testing.md), and [decisions](docs/architecture/decisions/0001-foundation.md) describe the current boundaries. Future phases address security, workspaces, awareness, recovery, integration, analysis, interfaces and release; none is implied by this foundation.
 
-## Phase 2 experimental development commands
-
-**Warning:** registry commands are unauthenticated and the storage security gate fails. Use disposable data only; do not use the legacy adoption path on valuable data.
+## Registry-independent development commands
 
 ```sh
-cargo run --locked -p rit-cli -- doctor --json
-cargo run --locked -p rit-cli -- inspect /path/to/existing/repo --json
-cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data init /path/to/existing/repo
-cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data repository list --json
-cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data repository info REPOSITORY_ID
-cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data status REPOSITORY_ID --json
+cargo run --locked -p rit-cli -- repo inspect /path/to/existing/repo --json
+cargo run --locked -p rit-cli -- repo worktrees /path/to/existing/repo --json
+cargo run --locked -p rit-cli -- dependencies inspect --repo /path/to/existing/repo --json
+cargo run --locked -p rit-cli -- activity reconcile --repo /path/to/existing/repo --json
 ```
 
-`rit init` registers an **existing** Git repository; it never runs `git init`. Git executable override: `--git-executable` then `RIT_GIT_EXECUTABLE`; data directory override: `--data-dir` then `RIT_DATA_DIR`. Only Unicode paths are currently supported for persistence and status. JSON doctor is now schema version 2: the Phase 1 fields remain and `git` and `storage` were added. Other JSON output uses schema version 1. Git 2.46+ is a provisional requirement; only Git 2.47.3/Linux has been tested. See [Phase 2 report](docs/phases/phase-02-report.md) before relying on any behavior.
-
-## Additional read-only Git commands
-
-`rit repo branches PATH --json`, `rit repo refs PATH --json` and `rit repo log PATH --limit 20 --json` read Git directly without opening the registry. They use local OS-user permissions, not RIT authentication, and their observations can be stale. See `docs/CLI_REFERENCE.md`.
+`rit checkpoint create --repo PATH --commit-only` writes a Git ref for committed HEAD **only**; it does not capture staged, unstaged, untracked, ignored, submodule or LFS contents. Full capture and restore are not implemented. `rit mcp serve --repo PATH` exposes a local opt-in read-only scope, not authenticated authorization or filesystem isolation. Activity is polling, not a notification watcher. Git 2.46+ is required conservatively; only Git 2.47.3/Linux was tested. See [CLI reference](docs/CLI_REFERENCE.md) and [V3 handoff](docs/handoff/FINAL_REPORT.md).
