@@ -1,3 +1,5 @@
+> **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
+
 # Deferred blockers
 
 Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED; no blocker is an accepted risk. Existing Phase 2 registry operations are unauthenticated; adoption library API and recovery are incomplete.

@@ -1,6 +1,8 @@
+> **V3 status:** See `docs/handoff/FINAL_REPORT.md` (relative to repository root) for current capabilities, blocked storage, and validation; older phase descriptions are historical.
+
 # Git adapter
 
-`rit-git` exposes `Git::discover`, `version`, `executable`, `with_limits` and `inspect`; there is no public arbitrary-command API. `--git-executable` wins over `RIT_GIT_EXECUTABLE`, then PATH; discovery searches absolute PATH entries and canonicalizes the selected file. This intentionally excludes relative PATH entries. Git 2.29+ is the proposed floor, not a certified compatibility matrix; Git 2.47.3 on Linux was tested. Version suffixes are preserved. Each needed plumbing feature is checked by running it; unexpected output/exit fails inspection.
+`rit-git` exposes `Git::discover`, `version`, `executable`, `with_limits` and `inspect`; there is no public arbitrary-command API. `--git-executable` wins over `RIT_GIT_EXECUTABLE`, then PATH; discovery searches absolute PATH entries and canonicalizes the selected file. This intentionally excludes relative PATH entries. Git 2.46+ is the proposed floor, not a certified compatibility matrix; Git 2.47.3 on Linux was tested. Version suffixes are preserved. Each needed plumbing feature is checked by running it; unexpected output/exit fails inspection.
 
 Operations use argument vectors, not a shell. They remove inherited `GIT_*` variables, disable global/system configuration for inspection, disable prompts, optional locks, fsmonitor and untracked cache, and use C locale. Repository-local configuration is still read; turning off global config can cause safe-directory checks or users' intended configuration to differ. This is not a sandbox for malicious repositories or executable overrides. Raw Git stderr and remote URLs are never printed or persisted by this adapter.
 

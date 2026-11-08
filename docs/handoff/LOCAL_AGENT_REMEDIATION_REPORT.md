@@ -1,3 +1,5 @@
+> **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
+
 # Local-agent remediation handoff
 
 Security gate failed and was explicitly deferred, not accepted. Do not work around tests, delete SQLite journals, assume file IDs survive replacement, or silently migrate an unknown database. Restore both failing tests first through reviewed independent exact-file binding and crash-safe recovery; preserve database and sidecars together. Then implement Linux threat-model review and native Windows/macOS storage backends and adversarial tests, plus identity-bound adoption intent and SQLite-consistent backup. Consult the machine-readable blockers, historical report §17, decisions and test strategy for evidence and acceptance criteria. Only then integrate authentication and centrally enforced authorization, transactional audit with independently protected anchoring, and later providers. Preserve explicit default-deny/disabled behavior while incomplete.

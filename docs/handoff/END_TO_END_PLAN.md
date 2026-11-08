@@ -1,3 +1,5 @@
+> **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
+
 # 40-step v2 end-to-end acceptance scenario — NOT RUN
 
 All steps require disposable repositories, real providers, validated security and preserved evidence. No mocked result substitutes for production acceptance.

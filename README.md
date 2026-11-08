@@ -1,3 +1,5 @@
+> **V3 status:** See `docs/handoff/FINAL_REPORT.md` (relative to repository root) for current capabilities, blocked storage, and validation; older phase descriptions are historical.
+
 # RIT
 
 RIT is a planned local-first coordination layer for humans and AI agents working on ordinary Git repositories. **Git owns source-code history; RIT owns coordination around it.** RIT is an independent project, not a Git rewrite.
@@ -53,7 +55,7 @@ cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data repository in
 cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data status REPOSITORY_ID --json
 ```
 
-`rit init` registers an **existing** Git repository; it never runs `git init`. Git executable override: `--git-executable` then `RIT_GIT_EXECUTABLE`; data directory override: `--data-dir` then `RIT_DATA_DIR`. Only Unicode paths are currently supported for persistence and status. JSON doctor is now schema version 2: the Phase 1 fields remain and `git` and `storage` were added. Other JSON output uses schema version 1. Git 2.29+ is a provisional requirement; only Git 2.47.3/Linux has been tested. See [Phase 2 report](docs/phases/phase-02-report.md) before relying on any behavior.
+`rit init` registers an **existing** Git repository; it never runs `git init`. Git executable override: `--git-executable` then `RIT_GIT_EXECUTABLE`; data directory override: `--data-dir` then `RIT_DATA_DIR`. Only Unicode paths are currently supported for persistence and status. JSON doctor is now schema version 2: the Phase 1 fields remain and `git` and `storage` were added. Other JSON output uses schema version 1. Git 2.46+ is a provisional requirement; only Git 2.47.3/Linux has been tested. See [Phase 2 report](docs/phases/phase-02-report.md) before relying on any behavior.
 
 ## Additional read-only Git commands
 

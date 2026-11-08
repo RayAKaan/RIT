@@ -1,3 +1,5 @@
+> **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
+
 # RIT v2 implementation gap audit
 
 Audit baseline: local `phase/12-release-foundations`, `ebe84d4d0718306f4ae841f11a9cc2f945d7e42e`, clean worktree, with Phase 2.1 and all phase branches preserved. This is a requirement-to-code map, not a completion claim. See `deferred-work.yaml` for issue-level acceptance and dependencies and the historical phase reports for exact evidence. The original checkout remains authoritative. An existing exported bundle was a sanitized one-commit snapshot, not a phase-history bundle; the Phase 10 commit contains generated `.pyc` files with a machine-specific path. Its successor removes them. No history has been rewritten in the checkout.
