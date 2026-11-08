@@ -740,3 +740,17 @@ fn worktree_inventory_and_tracked_diff_are_read_only() {
     assert_eq!(diff.staged.len(), 1);
     assert!(diff.unstaged.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn rejects_git_without_conservative_lazy_fetch_floor() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let fake = d.path().join("git-old");
+    std::fs::write(&fake, "#!/bin/sh\necho git version 2.45.0\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        rit_git::Git::discover(Some(fake.as_os_str())),
+        Err(rit_git::GitError::Unsupported(_))
+    ));
+}

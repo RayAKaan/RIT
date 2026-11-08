@@ -28,7 +28,7 @@ pub enum GitError {
     #[error("unrecognized Git version output")]
     Version,
     /// Older Git is unsupported.
-    #[error("Git {0} is unsupported; Git 2.29 or newer and required capabilities are needed")]
+    #[error("Git {0} is unsupported; Git 2.46 or newer and required capabilities are needed")]
     Unsupported(String),
     /// The command ran longer than the deadline.
     #[error("Git operation timed out")]
@@ -134,7 +134,7 @@ impl Git {
             .next()
             .and_then(|v| v.parse::<u32>().ok())
             .ok_or(GitError::Version)?;
-        if (major, minor) < (2, 29) {
+        if (major, minor) < (2, 46) {
             return Err(GitError::Unsupported(version));
         }
         git.version = version;
@@ -179,6 +179,7 @@ impl Git {
             )
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_NO_LAZY_FETCH", "1")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("LC_ALL", "C")
             .args([
                 "--no-optional-locks",
