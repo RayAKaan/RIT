@@ -1,0 +1,12 @@
+[package]
+name = "rit-application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+[dependencies]
+rit-core = { path = "../rit-core" }
+rit-git = { path = "../rit-git" }
+rit-storage = { path = "../rit-storage" }
+thiserror.workspace = true

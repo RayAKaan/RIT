@@ -10,3 +10,4 @@ publish = false
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+uuid = { version = "1.18", features = ["v4", "serde"] }

@@ -1,6 +1,9 @@
 use rit_core::config::{Config, FileState, LogFormat, LogLevel, ResolvedConfig};
 use serde::Serialize;
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 use tracing::Level;
 
 pub fn init_logging(config: &Config) -> Result<(), String> {
@@ -29,6 +32,8 @@ struct Doctor<'a> {
     os: &'a str,
     architecture: &'a str,
     configuration: ConfigStatus,
+    git: GitStatus,
+    storage: StorageStatus,
 }
 #[derive(Serialize)]
 struct ConfigStatus {
@@ -39,9 +44,83 @@ struct ConfigStatus {
     log_format: LogFormat,
 }
 
-pub fn doctor(resolved: &ResolvedConfig, json: bool) -> Result<(), String> {
+#[derive(Serialize)]
+struct GitStatus {
+    status: &'static str,
+    executable: Option<String>,
+    version: Option<String>,
+    error: Option<String>,
+}
+#[derive(Serialize)]
+struct StorageStatus {
+    status: &'static str,
+    path: Option<String>,
+    schema_version: Option<i64>,
+    error: Option<String>,
+}
+
+pub fn doctor(
+    resolved: &ResolvedConfig,
+    json: bool,
+    git_executable: Option<&Path>,
+    data_dir: Option<&Path>,
+) -> Result<(), String> {
+    let git = match rit_git::Git::discover(git_executable.map(Path::as_os_str)) {
+        Ok(g) => GitStatus {
+            status: "ok",
+            executable: g.executable().to_str().map(str::to_owned),
+            version: Some(g.version().into()),
+            error: None,
+        },
+        Err(e) => GitStatus {
+            status: "error",
+            executable: None,
+            version: None,
+            error: Some(e.to_string()),
+        },
+    };
+    let storage = match rit_storage::data_dir(data_dir) {
+        Ok(path) => {
+            let display = path.to_str().map(str::to_owned);
+            match rit_storage::diagnose(&path) {
+                Ok(None) => StorageStatus {
+                    status: "not_initialized",
+                    path: display,
+                    schema_version: None,
+                    error: None,
+                },
+                Ok(Some(1)) => StorageStatus {
+                    status: "ok",
+                    path: display,
+                    schema_version: Some(1),
+                    error: None,
+                },
+                Ok(Some(v)) => StorageStatus {
+                    status: "migration_required",
+                    path: display,
+                    schema_version: Some(v),
+                    error: None,
+                },
+                Err(e) => StorageStatus {
+                    status: "error",
+                    path: display,
+                    schema_version: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        Err(e) => StorageStatus {
+            status: "error",
+            path: None,
+            schema_version: None,
+            error: Some(e.to_string()),
+        },
+    };
+    let failed = git.status == "error"
+        || storage.status == "error"
+        || storage.status == "migration_required";
     let report = Doctor {
-        schema_version: 1,
+        schema_version: 2,
         rit_version: rit_core::version::VERSION,
         os: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
@@ -56,6 +135,8 @@ pub fn doctor(resolved: &ResolvedConfig, json: bool) -> Result<(), String> {
             log_level: resolved.config.log_level,
             log_format: resolved.config.log_format,
         },
+        git,
+        storage,
     };
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -70,16 +151,27 @@ pub fn doctor(resolved: &ResolvedConfig, json: bool) -> Result<(), String> {
 OS: {}
 Architecture: {}
 Configuration: {} ({})
-Logging: {:?} / {:?}",
+Logging: {:?} / {:?}\nGit: {} (executable {:?}, version {:?}, error {:?})\nStorage: {} (path {:?}, schema {:?}, error {:?})",
             report.rit_version,
             report.os,
             report.architecture,
             report.configuration.status,
             report.configuration.file,
             report.configuration.log_level,
-            report.configuration.log_format
+            report.configuration.log_format,
+            report.git.status,
+            report.git.executable,
+            report.git.version,
+            report.git.error,
+            report.storage.status,
+            report.storage.path,
+            report.storage.schema_version,
+            report.storage.error
         )
         .map_err(|e| format!("cannot write doctor output: {e}"))?;
+    }
+    if failed {
+        return Err("one or more doctor checks failed".into());
     }
     Ok(())
 }
@@ -90,4 +182,17 @@ pub fn config_valid(schema_version: u32) -> Result<(), String> {
     let mut out = stdout.lock();
     writeln!(out, "Configuration valid (schema {}).", schema_version)
         .map_err(|e| format!("cannot write configuration output: {e}"))
+}
+
+/// Write a structured result without mixing diagnostics into stdout.
+pub fn value(value: &serde_json::Value, json: bool) -> Result<(), String> {
+    let out = io::stdout();
+    let mut out = out.lock();
+    if json {
+        serde_json::to_writer(&mut out, value)
+    } else {
+        serde_json::to_writer_pretty(&mut out, value)
+    }
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    writeln!(out).map_err(|e| format!("cannot write output: {e}"))
 }

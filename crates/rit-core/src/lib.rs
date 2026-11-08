@@ -6,4 +6,6 @@
 
 pub mod config;
 pub mod error;
+/// Repository identity, inspection, and status domain types.
+pub mod repository;
 pub mod version;

@@ -4,7 +4,7 @@ RIT is a planned local-first coordination layer for humans and AI agents working
 
 ## Status
 
-Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. Repository management, identity, workspaces, sandboxing, checkpoints, integration, analysis, MCP and SDKs are **not implemented**. This is not a production release.
+Early foundation preview (`0.1.0-dev.1`): configuration validation, a reusable core library, a CLI, logging, and runtime diagnostics are implemented. The Phase 2 development branch implements initial Git inspection and SQLite-backed repository registration. Phase 2 is not yet accepted; see its report for untested cases and safety limitations. Identity, workspaces, sandboxing, checkpoints, integration, analysis, MCP and SDKs are **not implemented**. This is not a production release.
 
 ## Build and run
 
@@ -36,4 +36,17 @@ Configuration has no secret fields. Do not place credentials in it. Logs go to s
 
 ## Architecture and roadmap
 
-`rit-cli` depends on `rit-core`; core has no CLI dependency or side effects on global logging. [Architecture](docs/architecture/overview.md), [component map](docs/architecture/component-map.md), [testing](docs/development/testing.md), and [decisions](docs/architecture/decisions/0001-foundation.md) describe the current boundaries. Future phases address Git inspection, security, workspaces, awareness, recovery, integration, analysis, interfaces and release; none is implied by this foundation.
+`rit-cli` composes `rit-application`, `rit-git`, `rit-storage`, and `rit-core`; core has no CLI, Git, SQLite, or global logging dependency. [Architecture](docs/architecture/overview.md), [component map](docs/architecture/component-map.md), [testing](docs/development/testing.md), and [decisions](docs/architecture/decisions/0001-foundation.md) describe the current boundaries. Future phases address security, workspaces, awareness, recovery, integration, analysis, interfaces and release; none is implied by this foundation.
+
+## Phase 2 development commands
+
+```sh
+cargo run --locked -p rit-cli -- doctor --json
+cargo run --locked -p rit-cli -- inspect /path/to/existing/repo --json
+cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data init /path/to/existing/repo
+cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data repository list --json
+cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data repository info REPOSITORY_ID
+cargo run --locked -p rit-cli -- --data-dir /outside/repo/rit-data status REPOSITORY_ID --json
+```
+
+`rit init` registers an **existing** Git repository; it never runs `git init`. Git executable override: `--git-executable` then `RIT_GIT_EXECUTABLE`; data directory override: `--data-dir` then `RIT_DATA_DIR`. Only Unicode paths are currently supported for persistence and status. JSON doctor is now schema version 2: the Phase 1 fields remain and `git` and `storage` were added. Other JSON output uses schema version 1. Git 2.29+ is a provisional requirement; only Git 2.47.3/Linux has been tested. See [Phase 2 report](docs/phases/phase-02-report.md) before relying on any behavior.

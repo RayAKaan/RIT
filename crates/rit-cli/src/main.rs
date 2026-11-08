@@ -4,7 +4,7 @@ mod cli;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand};
+use cli::{Cli, Command, ConfigCommand, RepositoryCommand};
 use rit_core::{
     config::{self, ConfigFile, Overrides},
     error::ConfigError,
@@ -66,13 +66,64 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
     })?;
     output::init_logging(&resolved.config).map_err(|e| (INTERNAL_FAILURE, e))?;
     tracing::debug!("configuration validated; executing command");
+    let git_arg = cli.git_executable.as_deref().map(|v| v.as_os_str());
     match cli.command {
-        Command::Doctor { json } => {
-            output::doctor(&resolved, json).map_err(|e| (RUNTIME_FAILURE, e))
-        }
         Command::Config {
             command: ConfigCommand::Validate,
         } => output::config_valid(resolved.config.schema_version).map_err(|e| (RUNTIME_FAILURE, e)),
+        Command::Doctor { json } => output::doctor(
+            &resolved,
+            json,
+            cli.git_executable.as_deref(),
+            cli.data_dir.as_deref(),
+        )
+        .map_err(|e| (RUNTIME_FAILURE, e)),
+        Command::Inspect { path, json } => {
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let ins = git
+                .inspect(&path)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"inspection":ins}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Repository {
+            command: RepositoryCommand::List { json },
+        } => {
+            let data = rit_storage::data_dir(cli.data_dir.as_deref())
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let repos = match rit_storage::Registry::open_readonly(&data)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
+            {
+                Some(registry) => registry
+                    .list()
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+                None => Vec::new(),
+            };
+            output::value(
+                &serde_json::json!({"schema_version":1,"repositories":repos}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        command => {
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let data = rit_storage::data_dir(cli.data_dir.as_deref())
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let services = rit_application::Repositories::new(git, data);
+            let fail = |e: rit_application::ApplicationError| (RUNTIME_FAILURE, e.to_string());
+            match command {
+                Command::Init {path,json} => { let (repo,created)=services.register(&path,None).map_err(fail)?; output::value(&serde_json::json!({"schema_version":1,"created":created,"repository":repo}),json) },
+                Command::Repository {command:RepositoryCommand::Register{path,name,json}} => {let (repo,created)=services.register(&path,name.as_deref()).map_err(fail)?; output::value(&serde_json::json!({"schema_version":1,"created":created,"repository":repo}),json)},
+                Command::Repository {command:RepositoryCommand::Info{target,json}} => {let (repo,ins)=services.live(&target).map_err(fail)?;output::value(&serde_json::json!({"schema_version":1,"repository":repo,"inspection":ins}),json)},
+                Command::Status {target,json}=>{let (_,ins)=services.live(&target).map_err(fail)?;let status=ins.status.ok_or_else(||(RUNTIME_FAILURE,"bare repositories have no working-tree status".to_string()))?;output::value(&serde_json::json!({"schema_version":1,"status":status}),json)},
+                _=>Err("unexpected command".to_string()),
+            }.map_err(|e| (RUNTIME_FAILURE,e))
+        }
     }
 }
 

@@ -8,11 +8,15 @@ fn run(args: &[&str], envs: &[(&str, &str)]) -> Output {
     let home = TempDir::new().unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_rit"));
     cmd.args(args)
+        .env_remove("RIT_DATA_DIR")
+        .env_remove("RIT_GIT_EXECUTABLE")
         .env_remove("RIT_LOG_LEVEL")
         .env_remove("RIT_LOG_FORMAT")
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path().join("xdg"))
-        .env("APPDATA", home.path().join("appdata"));
+        .env("APPDATA", home.path().join("appdata"))
+        .env("LOCALAPPDATA", home.path().join("localappdata"))
+        .env("XDG_DATA_HOME", home.path().join("data"));
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -46,7 +50,9 @@ fn doctor_and_json() {
     assert!(out.status.success());
     assert!(out.stderr.is_empty());
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["git"]["status"], "ok");
+    assert_eq!(report["storage"]["status"], "not_initialized");
     assert_eq!(report["configuration"]["status"], "valid");
     assert_eq!(report["configuration"]["file"], "missing_using_defaults");
     assert_eq!(report["rit_version"], env!("CARGO_PKG_VERSION"));
