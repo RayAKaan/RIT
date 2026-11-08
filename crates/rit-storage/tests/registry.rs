@@ -366,3 +366,36 @@ fn unknown_empty_database_is_not_automatically_initialized() {
     assert!(Registry::open(d.path()).is_err());
     assert_eq!(std::fs::read(&p).unwrap(), before);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn refuses_replaced_marked_database_even_if_schema_and_application_id_match() {
+    // Both files are clean SQLite databases and both connections have closed
+    // before the copy: this does not copy a live SQLite transaction.
+    let d = private_temp();
+    let original = d.path().join("original");
+    let other = d.path().join("other");
+    {
+        let mut db = Registry::open(&original).unwrap();
+        db.register(&sample("/one", "/one-common"), Some("original"))
+            .unwrap();
+    }
+    {
+        let mut db = Registry::open(&other).unwrap();
+        db.register(&sample("/two", "/two-common"), Some("unrelated"))
+            .unwrap();
+    }
+    let path = original.join("rit.sqlite3");
+    let preserved = original.join("original-preserved.sqlite3");
+    std::fs::rename(&path, &preserved).unwrap();
+    std::fs::copy(other.join("rit.sqlite3"), &path).unwrap();
+    make_private_file(&path);
+    let before = std::fs::read(&path).unwrap();
+    let result = Registry::open(&original);
+    assert!(
+        result.is_err(),
+        "a substituted database with matching SQLite marker and schema must not be authorized"
+    );
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert!(preserved.exists());
+}

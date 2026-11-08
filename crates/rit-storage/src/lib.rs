@@ -208,7 +208,7 @@ pub fn verify(dir: &Path) -> Result<Option<StorageVerification>, StorageError> {
         return Ok(None);
     }
     let c = readonly(&p)?;
-    let (app, version) = identity(&c)?;
+    let (app, version) = preflight(identity(&c))?;
     let valid = if version == 1 {
         match preflight(validate_schema(&c)) {
             Ok(()) => true,
@@ -235,7 +235,7 @@ pub fn adopt_legacy(dir: &Path, confirmed: bool) -> Result<(), StorageError> {
     let path = guard.path.join("rit.sqlite3");
     {
         let c = readonly(&path)?;
-        if identity(&c)? != (0, 1) {
+        if preflight(identity(&c))? != (0, 1) {
             return Err(StorageError::BadSchema);
         }
         preflight(validate_schema(&c))?;

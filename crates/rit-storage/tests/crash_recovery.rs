@@ -1,4 +1,4 @@
-//! A deliberately unpassed acceptance test retained for the Phase 2.1 recovery blocker.
+//! Real subprocess crash recovery acceptance; failures must remain visible in the required suite.
 #![cfg(target_os = "linux")]
 use rit_core::repository::{Head, Inspection};
 use rit_storage::Registry;
@@ -15,6 +15,14 @@ fn crash_writer_helper() {
         return;
     };
     let c = rusqlite::Connection::open(path).unwrap();
+    let version: String = c
+        .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+        .unwrap();
+    let mode: String = c
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "delete", "fixture requires rollback journal mode");
+    println!("RIT_FIXTURE_SQLITE={version} JOURNAL_MODE={mode}");
     c.execute_batch("PRAGMA cache_size=10; BEGIN IMMEDIATE;")
         .unwrap();
     let id: String = c
@@ -28,7 +36,6 @@ fn crash_writer_helper() {
     std::thread::sleep(Duration::from_secs(60));
 }
 #[test]
-#[ignore = "known critical blocker: read-only identity preflight prevents hot-journal recovery"]
 fn marked_registry_recovers_hot_journal_after_killed_writer() {
     let d = tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -50,6 +57,11 @@ fn marked_registry_recovers_hot_journal_after_killed_writer() {
         status: None,
     };
     let id = registry.register(&observation, None).unwrap().0.id;
+    let mut second = observation.clone();
+    second.location = "/two".into();
+    second.common_git_dir = "/common2".into();
+    second.git_dir = "/common2".into();
+    let id2 = registry.register(&second, None).unwrap().0.id;
     drop(registry);
     let path = d.path().join("rit.sqlite3");
     let mut child = Command::new(std::env::current_exe().unwrap())
@@ -66,13 +78,37 @@ fn marked_registry_recovers_hot_journal_after_killed_writer() {
             lines.read_line(&mut line).unwrap() > 0,
             "writer failed before reaching the transaction"
         );
+        eprint!("{line}");
         if line.contains("RIT_WRITER_READY") {
             break;
         }
     }
+    use std::os::unix::process::ExitStatusExt;
     child.kill().unwrap();
-    child.wait().unwrap();
+    let exit = child.wait().unwrap();
+    eprintln!("RIT_FIXTURE_WRITER_EXIT_SIGNAL={:?}", exit.signal());
+    assert_eq!(exit.signal(), Some(9), "fixture must end in SIGKILL");
     let journal = std::fs::read(d.path().join("rit.sqlite3-journal")).unwrap();
+    assert!(
+        journal.len() > 512,
+        "journal must exceed SQLite's hot-journal size threshold"
+    );
+    assert!(path.exists());
+    eprintln!(
+        "RIT_FIXTURE_JOURNAL_BYTES={} MAGIC={:02x?}",
+        journal.len(),
+        &journal[..8]
+    );
+    let fs = Command::new("stat")
+        .args(["-f", "-c", "%T"])
+        .arg(d.path())
+        .output()
+        .unwrap();
+    assert!(fs.status.success());
+    eprintln!(
+        "RIT_FIXTURE_FILESYSTEM={}",
+        String::from_utf8_lossy(&fs.stdout).trim()
+    );
     assert_eq!(
         &journal[..8],
         &[0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7],
@@ -82,4 +118,51 @@ fn marked_registry_recovers_hot_journal_after_killed_writer() {
     let registry = Registry::open(d.path())
         .expect("hot-journal recovery should succeed without adopting an unrelated database");
     assert_eq!(registry.get(id).unwrap().unwrap().locations.len(), 1);
+    assert_eq!(registry.get(id2).unwrap().unwrap().locations.len(), 1);
+    assert_eq!(
+        registry.list().unwrap().len(),
+        2,
+        "uncommitted inserts were rolled back"
+    );
+    assert!(registry.quick_check().unwrap());
+    drop(registry);
+    let mut registry = Registry::open(d.path()).unwrap();
+    let mut third = observation;
+    third.location = "/three".into();
+    third.common_git_dir = "/common3".into();
+    third.git_dir = "/common3".into();
+    let id3 = registry.register(&third, None).unwrap().0.id;
+    assert!(registry.get(id3).unwrap().is_some());
+    drop(registry);
+    let reopened = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "clean_restart_helper", "--nocapture"])
+        .env("RIT_TEST_REOPEN_DIR", d.path())
+        .status()
+        .unwrap();
+    assert!(reopened.success(), "separate clean restart must succeed");
+}
+
+#[test]
+fn clean_restart_helper() {
+    let Some(dir) = std::env::var_os("RIT_TEST_REOPEN_DIR") else {
+        return;
+    };
+    let path = std::path::Path::new(&dir);
+    let registry = Registry::open(path).unwrap();
+    assert_eq!(registry.list().unwrap().len(), 3);
+    assert!(registry.quick_check().unwrap());
+    drop(registry);
+    // The fixture checks full integrity and FK consistency using SQLite APIs,
+    // in a fresh process, after the registry connection has been dropped.
+    let c = rusqlite::Connection::open_with_flags(
+        path.join("rit.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let result: String = c
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(result, "ok");
+    let mut stmt = c.prepare("PRAGMA foreign_key_check").unwrap();
+    assert!(stmt.query([]).unwrap().next().unwrap().is_none());
 }
