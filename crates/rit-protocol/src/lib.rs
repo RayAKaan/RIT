@@ -17,6 +17,10 @@ fn authorize(method: &str) -> bool {
 /// Handle one JSON-RPC request. `None` means no reply, as for notifications.
 /// No request parameters are logged or stored. Batch requests are not supported.
 pub fn dispatch(input: &str) -> Option<Value> {
+    dispatch_scoped(input, None)
+}
+/// Dispatch with an optional explicitly selected local read-only repository scope.
+pub fn dispatch_scoped(input: &str, scope: Option<&ReadOnlyScope>) -> Option<Value> {
     let request: Value = match serde_json::from_str(input) {
         Ok(v) => v,
         Err(_) => return Some(error(Value::Null, -32700, "Parse error")),
@@ -58,7 +62,7 @@ pub fn dispatch(input: &str) -> Option<Value> {
         }
     }
     // Middleware runs on every route, including notifications and discovery.
-    if !authorize(method) {
+    if !authorize(method) && !(method == "tools/call" && scope.is_some()) {
         return id.map(|id| error(id, -32001, "Operation unavailable or unauthorized"));
     }
     if method == "notifications/initialized" {
@@ -80,12 +84,88 @@ pub fn dispatch(input: &str) -> Option<Value> {
             json!({"resultType":"complete", "supportedVersions":[MODERN_VERSION], "capabilities":{"tools":{}}, "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"rit","version":env!("CARGO_PKG_VERSION")}}, "ttlMs":0, "cacheScope":"public"})
         }
         "ping" if modern => json!({"resultType":"complete"}),
-        "tools/list" if modern => json!({"resultType":"complete","tools":[]}),
+        "tools/list" if modern => json!({"resultType":"complete","tools":tool_list(scope)}),
         "ping" => json!({}),
-        "tools/list" => json!({"tools":[]}),
+        "tools/list" => json!({"tools":tool_list(scope)}),
+        "tools/call" => {
+            let params = o.get("params");
+            let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
+                return Some(error(id, -32602, "Invalid params"));
+            };
+            let args = params.and_then(|p| p.get("arguments"));
+            if args.is_some_and(|v| !v.as_object().is_some_and(|o| o.is_empty())) {
+                return Some(error(id, -32602, "Arguments must be empty"));
+            }
+            let Some(scope) = scope else {
+                return Some(error(id, -32001, "Operation unavailable or unauthorized"));
+            };
+            let result = match scope.call(name) {
+                Ok(v) => v,
+                Err(_) => return Some(error(id, -32001, "Operation unavailable or unauthorized")),
+            };
+            let mut value = json!({"content":[{"type":"text","text":result.to_string()}],"structuredContent":result,"isError":false});
+            if modern {
+                value["resultType"] = json!("complete");
+            }
+            value
+        }
         _ => return Some(error(id, -32601, "Method not found")),
     };
     Some(json!({"jsonrpc":"2.0","id":id,"result":result}))
+}
+/// Explicit, single-repository stdio scope. This is an OS-user boundary, not RIT authentication.
+pub struct ReadOnlyScope {
+    repo: std::path::PathBuf,
+    common_git_dir: String,
+    service: rit_application::GitReadService,
+}
+impl ReadOnlyScope {
+    /// Select a repository once at startup. Tool arguments cannot select another path.
+    pub fn open(repo: &std::path::Path) -> Result<Self, String> {
+        let repo = repo
+            .canonicalize()
+            .map_err(|_| "cannot access repository path".to_string())?;
+        let service = rit_application::GitReadService::new(
+            rit_git::Git::discover(None).map_err(|_| "Git unavailable".to_string())?,
+        );
+        let ins = service
+            .inspect(&repo)
+            .map_err(|_| "repository unavailable".to_string())?;
+        Ok(Self {
+            repo,
+            common_git_dir: ins.common_git_dir,
+            service,
+        })
+    }
+    fn call(&self, name: &str) -> Result<Value, ()> {
+        let ins = self.service.inspect(&self.repo).map_err(|_| ())?;
+        if ins.common_git_dir != self.common_git_dir {
+            return Err(());
+        }
+        match name {
+            "repository.inspect" => Ok(json!({"schema_version":1,"inspection":ins})),
+            "repository.status" => Ok(json!({"schema_version":1,"status":ins.status.ok_or(())?})),
+            "repository.branches" => Ok(
+                json!({"schema_version":1,"references":self.service.references(&self.repo).map_err(|_|())?.into_iter().filter(|r|r.name.starts_with("refs/heads/")||r.name.starts_with("refs/remotes/")).collect::<Vec<_>>() }),
+            ),
+            "repository.history" => Ok(
+                json!({"schema_version":1,"commits":self.service.history(&self.repo,20).map_err(|_|())?}),
+            ),
+            "repository.worktrees" => Ok(
+                json!({"schema_version":1,"worktrees":self.service.worktrees(&self.repo).map_err(|_|())?}),
+            ),
+            "dependencies.inspect" => Ok(
+                json!({"schema_version":1,"graph":self.service.dependencies(&self.repo).map_err(|_|())?}),
+            ),
+            _ => Err(()),
+        }
+    }
+}
+fn tool_list(scope: Option<&ReadOnlyScope>) -> Vec<Value> {
+    if scope.is_none() {
+        return Vec::new();
+    }
+    ["repository.inspect","repository.status","repository.branches","repository.history","repository.worktrees","dependencies.inspect"].iter().map(|name|json!({"name":name,"description":"Read-only inspection of the explicitly configured repository; no path arguments.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})).collect()
 }
 fn error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
@@ -93,6 +173,36 @@ fn error(id: Value, code: i32, message: &str) -> Value {
 /// Rust SDK request builder; clients choose and authenticate their own transport.
 pub fn request(id: u64, method: &str, params: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+}
+
+/// Serve bounded newline-delimited requests on standard input/output, with optional read-only scope.
+pub fn serve_stdio(scope: Option<ReadOnlyScope>) -> std::io::Result<()> {
+    use std::io::{self, BufRead, Read, Write};
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    loop {
+        let mut line = Vec::new();
+        let n = (&mut input).take(65_537).read_until(b'\n', &mut line)?;
+        if n == 0 {
+            break;
+        }
+        if n > 65_536 || !line.ends_with(b"\n") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request too large or unterminated",
+            ));
+        }
+        let text = std::str::from_utf8(&line)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))?;
+        if let Some(reply) = dispatch_scoped(text, scope.as_ref()) {
+            serde_json::to_writer(&mut output, &reply)?;
+            output.write_all(b"\n")?;
+            output.flush()?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

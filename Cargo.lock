@@ -487,6 +487,7 @@ dependencies = [
  "rit-application",
  "rit-core",
  "rit-git",
+ "rit-protocol",
  "rit-storage",
  "serde",
  "serde_json",
@@ -521,7 +522,10 @@ dependencies = [
 name = "rit-protocol"
 version = "0.1.0-dev.1"
 dependencies = [
+ "rit-application",
+ "rit-git",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

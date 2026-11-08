@@ -6,4 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+rit-application = { path = "../rit-application" }
+rit-git = { path = "../rit-git" }
 serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.24.0"

@@ -4,7 +4,9 @@ mod cli;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand, DependenciesCommand, RepositoryCommand, StorageCommand};
+use cli::{
+    Cli, Command, ConfigCommand, DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand,
+};
 use rit_core::{
     config::{self, ConfigFile, Overrides},
     error::ConfigError,
@@ -94,6 +96,16 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 }
                 StorageCommand::AdoptLegacy { .. } => Err((RUNTIME_FAILURE, "operation unavailable: legacy adoption requires a verified identity-bound intent and SQLite-consistent backup".into())),
             }
+        }
+        Command::Mcp {
+            command: McpCommand::Serve { repo },
+        } => {
+            let scope = repo
+                .as_deref()
+                .map(rit_protocol::ReadOnlyScope::open)
+                .transpose()
+                .map_err(|e| (RUNTIME_FAILURE, e))?;
+            rit_protocol::serve_stdio(scope).map_err(|e| (RUNTIME_FAILURE, e.to_string()))
         }
         Command::Dependencies { command } => {
             let (repo, json) = match command {

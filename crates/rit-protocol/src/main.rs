@@ -1,29 +1,31 @@
-//! Local newline-delimited JSON-RPC discovery transport; no network listener.
-use std::io::{self, BufRead, Read, Write};
+//! Local newline-delimited JSON-RPC transport; no network listener.
+use std::io;
 fn main() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut input = stdin.lock();
-    let stdout = io::stdout();
-    let mut output = stdout.lock();
-    loop {
-        let mut line = Vec::new();
-        let n = (&mut input).take(65_537).read_until(b'\n', &mut line)?;
-        if n == 0 {
-            break;
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    let scope = match args.next() {
+        None => None,
+        Some(flag) if flag == "--repo" => {
+            let path = args.next().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "--repo requires a path")
+            })?;
+            if args.next().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unexpected arguments",
+                ));
+            }
+            Some(
+                rit_protocol::ReadOnlyScope::open(std::path::Path::new(&path))
+                    .map_err(io::Error::other)?,
+            )
         }
-        if n > 65_536 || !line.ends_with(b"\n") {
+        Some(_) => {
             return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request too large or unterminated",
+                io::ErrorKind::InvalidInput,
+                "usage: rit-protocol [--repo PATH]",
             ));
         }
-        let text = std::str::from_utf8(&line)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))?;
-        if let Some(reply) = rit_protocol::dispatch(text) {
-            serde_json::to_writer(&mut output, &reply)?;
-            output.write_all(b"\n")?;
-            output.flush()?;
-        }
-    }
-    Ok(())
+    };
+    rit_protocol::serve_stdio(scope)
 }

@@ -63,6 +63,11 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Run a local stdio protocol server with optional read-only repository scope.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     /// Analyze committed source dependencies without registry access.
     Dependencies {
         #[command(subcommand)]
@@ -386,5 +391,14 @@ pub enum DependenciesCommand {
         repo: PathBuf,
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    /// Serve on stdio; --repo explicitly exposes limited read-only repository data.
+    Serve {
+        #[arg(long)]
+        repo: Option<PathBuf>,
     },
 }
