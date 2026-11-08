@@ -532,6 +532,80 @@
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "handoff history",
       "required_implementation": "Obtain owner decision and review before full-history distribution, or use an independently audited history-redaction procedure with explicit authorization."
+    },
+    {
+      "id": "RIT-P01-001",
+      "phase": "1",
+      "component": "canonical domain and operations",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Canonical events, identifiers and recoverable operations",
+      "evidence": "Typed IDs exist for some entities and Git OIDs; common event envelope, operation protocol, timestamps and canonical relationship coverage are absent.",
+      "root_cause": "The original foundation did not implement all v2 cross-phase models.",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "No durable new workflow or event processing is claimed.",
+      "required_remediation": "Add versioned typed entities, validated relationships, UTC timestamps, operation IDs, events, recovery state and schema migrations.",
+      "required_implementation": "Add versioned typed entities, validated relationships, UTC timestamps, operation IDs, events, recovery state and schema migrations.",
+      "acceptance_criteria": "Model and transition tests plus real restart/recovery and interface serialization tests.",
+      "verification": "Model and transition tests plus real restart/recovery and interface serialization tests.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "canonical domain and operations",
+      "files": [
+        "crates/rit-core/src/lib.rs"
+      ]
+    },
+    {
+      "id": "RIT-P02-001",
+      "phase": "2",
+      "component": "Git repository service",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Complete Git visibility and safe repository lifecycle",
+      "evidence": "Read-only status, refs and bounded HEAD history work; file history, diffs, unregister, secure moves, fuller format and platform handling remain absent.",
+      "root_cause": "Only a subset of the v2 Git service was implemented.",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "Use independent direct Git read commands only as described; registry mutations remain experimental and unauthenticated.",
+      "required_remediation": "Implement missing read-only inspection plus authenticated safe registration, relocation and unregister after storage gates.",
+      "required_implementation": "Implement missing read-only inspection plus authenticated safe registration, relocation and unregister after storage gates.",
+      "acceptance_criteria": "Disposable bare/worktree/shallow/sha256, all porcelain records, path and multiprocess tests.",
+      "verification": "Disposable bare/worktree/shallow/sha256, all porcelain records, path and multiprocess tests.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "Git repository service",
+      "files": [
+        "crates/rit-git/src/process.rs"
+      ]
+    },
+    {
+      "id": "RIT-P10-003",
+      "phase": "10",
+      "component": "MCP protocol compliance",
+      "severity": "high",
+      "status": "deferred",
+      "title": "MCP modern/legacy discovery subset is not full conformance",
+      "evidence": "Discovery prototype advertises 2026-07-28 and legacy discovery but has no full base message-pattern/conformance suite; all tool calls denied.",
+      "root_cause": "Protocol server is a bounded partial prototype.",
+      "dependencies": [
+        "RIT-P10-001"
+      ],
+      "interim_behavior": "Do not claim MCP conformance or advertise privileged tools as available.",
+      "required_remediation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
+      "required_implementation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
+      "acceptance_criteria": "Version negotiation, errors, notifications, cancellation and real official-client interoperability tests pass.",
+      "verification": "Version negotiation, errors, notifications, cancellation and real official-client interoperability tests pass.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "MCP protocol compliance",
+      "files": [
+        "crates/rit-protocol/src/lib.rs"
+      ]
     }
   ]
 }
