@@ -250,26 +250,68 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             Ok(())
         }
         Command::Dependencies { command } => {
-            let (repo, json) = match command {
-                DependenciesCommand::Inspect { repo, json }
-                | DependenciesCommand::Refresh { repo, json } => (repo, json),
+            let (repo, commit, branch, worktree, workspace, json) = match command {
+                DependenciesCommand::Inspect {
+                    repo,
+                    commit,
+                    branch,
+                    worktree,
+                    workspace,
+                    json,
+                }
+                | DependenciesCommand::Refresh {
+                    repo,
+                    commit,
+                    branch,
+                    worktree,
+                    workspace,
+                    json,
+                } => (repo, commit, branch, worktree, workspace, json),
             };
             let service = rit_application::GitReadService::new(
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
             );
-            let graph = service
-                .dependencies(&repo)
-                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let graph = if let Some(id) = workspace.as_deref() {
+                let id = id
+                    .parse()
+                    .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                service.dependencies_workspace(&repo, id)
+            } else if worktree {
+                service.dependencies_worktree(&repo)
+            } else if let Some(revision) = commit.as_deref().or(branch.as_deref()) {
+                service.dependencies_revision(&repo, revision)
+            } else {
+                service.dependencies(&repo)
+            }
+            .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
             output::value(&serde_json::json!({"schema_version":1,"graph":graph}), json)
                 .map_err(|e| (RUNTIME_FAILURE, e))
         }
-        Command::Impact { repo, files, json } => {
+        Command::Impact {
+            repo,
+            files,
+            json,
+            commit,
+            branch,
+            worktree,
+            workspace,
+        } => {
             let service = rit_application::GitReadService::new(
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
             );
-            let graph = service
-                .dependencies(&repo)
-                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let graph = if let Some(id) = workspace.as_deref() {
+                let id = id
+                    .parse()
+                    .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                service.dependencies_workspace(&repo, id)
+            } else if worktree {
+                service.dependencies_worktree(&repo)
+            } else if let Some(revision) = commit.as_deref().or(branch.as_deref()) {
+                service.dependencies_revision(&repo, revision)
+            } else {
+                service.dependencies(&repo)
+            }
+            .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
             let domain = rit_core::impact::DependencyGraph {
                 source_revision: graph.commit.to_string(),
                 edges: graph
@@ -282,8 +324,34 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     })
                     .collect(),
             };
+            let files = if files.is_empty() {
+                let id = workspace
+                    .as_deref()
+                    .ok_or((RUNTIME_FAILURE, "--files or --workspace is required".into()))?
+                    .parse()
+                    .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                let state = rit_application::WorkspaceService::new(
+                    rit_git::Git::discover(git_arg)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+                )
+                .reconcile(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                let w = state
+                    .workspaces
+                    .into_iter()
+                    .find(|w| w.manifest.id == id && w.observation == "present")
+                    .ok_or((RUNTIME_FAILURE, "workspace unavailable".into()))?;
+                w.status
+                    .ok_or((RUNTIME_FAILURE, "workspace status unavailable".into()))?
+                    .changes
+                    .into_iter()
+                    .map(|c| c.path)
+                    .collect()
+            } else {
+                files
+            };
             let reports=files.iter().map(|file| {let impact=domain.impact(file,&graph.commit.to_string());serde_json::json!({"changed":file,"known_dependents":impact.known_dependents,"complete":false})}).collect::<Vec<_>>();
-            output::value(&serde_json::json!({"schema_version":1,"commit":graph.commit,"reports":reports,"unresolved":graph.unresolved,"problematic_files":graph.problematic_files,"omitted_non_regular":graph.omitted_non_regular,"complete":false,"scope":graph.scope}),json).map_err(|e|(RUNTIME_FAILURE,e))
+            output::value(&serde_json::json!({"schema_version":1,"commit":graph.commit,"snapshot_id":graph.snapshot_id,"non_atomic":graph.non_atomic,"reports":reports,"unresolved":graph.unresolved,"problematic_files":graph.problematic_files,"omitted_non_regular":graph.omitted_non_regular,"complete":false,"scope":graph.scope}),json).map_err(|e|(RUNTIME_FAILURE,e))
         }
         Command::Checkpoint {
             command:

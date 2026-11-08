@@ -564,12 +564,36 @@ impl Git {
         &self,
         input: &Path,
     ) -> Result<rit_core::git_object::SourceSnapshot, GitError> {
+        self.source_snapshot_revision(input, None)
+    }
+    /// Read a bounded immutable snapshot from an explicitly selected commit or branch.
+    pub fn source_snapshot_revision(
+        &self,
+        input: &Path,
+        revision: Option<&str>,
+    ) -> Result<rit_core::git_object::SourceSnapshot, GitError> {
         use rit_core::git_object::{ObjectId, SourceFile, SourceSnapshot};
         let ins = self.inspect(input)?;
-        let commit = match ins.head {
-            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
-            Head::Unborn { .. } => {
-                return Err(GitError::Parse("unborn repository has no source snapshot"));
+        let commit = if let Some(revision) = revision {
+            if revision.is_empty() || revision.len() > 256 || revision.contains('\0') {
+                return Err(GitError::Parse("invalid source revision"));
+            }
+            self.query(
+                input,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{revision}^{{commit}}"),
+                ],
+                "source revision",
+            )?
+        } else {
+            match ins.head {
+                Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+                Head::Unborn { .. } => {
+                    return Err(GitError::Parse("unborn repository has no source snapshot"));
+                }
             }
         };
         let format = rit_core::git_object::ObjectFormat::parse(&ins.object_format)
@@ -599,7 +623,12 @@ impl Git {
                 .ok_or(GitError::Parse("tree fields"))?;
             let meta = std::str::from_utf8(&entry[..tab]).map_err(|_| GitError::NonUnicode)?;
             let path = std::str::from_utf8(&entry[tab + 1..]).map_err(|_| GitError::NonUnicode)?;
-            if !(path.ends_with(".py") || path.ends_with(".ts") || path.ends_with(".go")) {
+            if !(path.ends_with(".py")
+                || path.ends_with(".ts")
+                || path.ends_with(".go")
+                || path == "go.mod"
+                || path.ends_with("/go.mod"))
+            {
                 continue;
             }
             let mut fields = meta.split(' ');
@@ -645,9 +674,117 @@ impl Git {
             files.push(SourceFile { path, bytes });
         }
         Ok(SourceSnapshot {
+            snapshot_id: format!("commit:{}", commit.as_hex()),
+            non_atomic: false,
+            scope: "selected committed snapshot; uncommitted worktree content is not analyzed",
             commit,
             files,
             omitted_non_regular: omitted,
+        })
+    }
+    /// Observe tracked and untracked source bytes without following symlinks or running filters.
+    /// The observation is non-atomic, omits ignored paths and may become stale immediately.
+    pub fn source_snapshot_worktree(
+        &self,
+        input: &Path,
+    ) -> Result<rit_core::git_object::SourceSnapshot, GitError> {
+        use rit_core::git_object::{ObjectFormat, ObjectId, SourceFile, SourceSnapshot};
+        use sha2::{Digest, Sha256};
+        let ins = self.inspect(input)?;
+        let root = ins
+            .worktree
+            .as_deref()
+            .ok_or(GitError::Unavailable("bare repository has no worktree"))?;
+        let head = match ins.head {
+            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+            Head::Unborn { .. } => {
+                return Err(GitError::Parse("unborn worktree has no snapshot base"));
+            }
+        };
+        let commit = ObjectId::new(
+            ObjectFormat::parse(&ins.object_format).ok_or(GitError::Parse("object format"))?,
+            &head,
+        )
+        .map_err(GitError::Parse)?;
+        let output = self.run(
+            Some(Path::new(root)),
+            &[
+                "ls-files".into(),
+                "--cached".into(),
+                "--others".into(),
+                "--exclude-standard".into(),
+                "-z".into(),
+            ],
+            "workspace source list",
+        )?;
+        if !output.is_empty() && !output.ends_with(&[0]) {
+            return Err(GitError::Parse("source list terminator"));
+        }
+        let mut paths = std::collections::BTreeSet::new();
+        for raw in output.split(|b| *b == 0).filter(|v| !v.is_empty()) {
+            let path = std::str::from_utf8(raw).map_err(|_| GitError::NonUnicode)?;
+            if !(path.ends_with(".py")
+                || path.ends_with(".ts")
+                || path.ends_with(".go")
+                || path == "go.mod"
+                || path.ends_with("/go.mod"))
+            {
+                continue;
+            }
+            if Path::new(path)
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(GitError::Parse("worktree source path"));
+            }
+            paths.insert(path.to_owned());
+            if paths.len() > 500 {
+                return Err(GitError::Parse("source file count exceeds 500"));
+            }
+        }
+        let mut files = Vec::new();
+        let mut omitted = 0;
+        let mut omitted_paths = Vec::new();
+        let mut total = 0usize;
+        for path in paths {
+            match read_worktree_file(Path::new(root), &path)? {
+                Some(bytes) => {
+                    total = total
+                        .checked_add(bytes.len())
+                        .ok_or(GitError::OutputLimit)?;
+                    if total > 8_388_608 {
+                        return Err(GitError::Parse("worktree snapshot exceeds 8 MiB"));
+                    }
+                    files.push(SourceFile { path, bytes });
+                }
+                None => {
+                    omitted += 1;
+                    omitted_paths.push(path);
+                }
+            }
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"rit-worktree-source-v1\0");
+        hash.update(commit.as_hex().as_bytes());
+        for path in omitted_paths {
+            hash.update(b"omitted\0");
+            hash.update((path.len() as u64).to_be_bytes());
+            hash.update(path.as_bytes());
+        }
+        for f in &files {
+            hash.update((f.path.len() as u64).to_be_bytes());
+            hash.update(f.path.as_bytes());
+            hash.update((f.bytes.len() as u64).to_be_bytes());
+            hash.update(&f.bytes)
+        }
+        let snapshot_id = format!("worktree-sha256:{:x}", hash.finalize());
+        Ok(SourceSnapshot {
+            commit,
+            files,
+            omitted_non_regular: omitted,
+            snapshot_id,
+            non_atomic: true,
+            scope: "non-atomic worktree observation of tracked and untracked supported files; ignored files excluded; staged bytes are not separately analyzed",
         })
     }
     /// Create a bounded Git-native workspace, never invoking checkout filters or hooks.
@@ -1637,5 +1774,70 @@ fn materialize_files(
 fn materialize_files(_: &Path, _: Vec<(String, String, bool, Vec<u8>)>) -> Result<(), GitError> {
     Err(GitError::Unavailable(
         "workspace materialization unsupported on this platform",
+    ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>, GitError> {
+    use rustix::fs::{Mode, OFlags, fstat, open, openat};
+    use std::io::Read;
+    use std::path::Component;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut dir = open(root, flags, Mode::empty()).map_err(|e| GitError::Launch(e.into()))?;
+    let mut parts = Path::new(path).components().peekable();
+    while let Some(Component::Normal(n)) = parts.next() {
+        if parts.peek().is_some() {
+            dir = match openat(&dir, n, flags, Mode::empty()) {
+                Ok(f) => f,
+                Err(
+                    rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP,
+                ) => return Ok(None),
+                Err(e) => return Err(GitError::Launch(e.into())),
+            };
+            continue;
+        }
+        let fd = match openat(
+            &dir,
+            n,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(f) => f,
+            Err(rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(GitError::Launch(e.into())),
+        };
+        let before = fstat(&fd).map_err(|e| GitError::Launch(e.into()))?;
+        if before.st_mode & 0o170000 != 0o100000 {
+            return Ok(None);
+        }
+        if before.st_size < 0 || before.st_size > 1_048_576 {
+            return Err(GitError::Parse("worktree source exceeds 1 MiB"));
+        }
+        let file = std::fs::File::from(fd);
+        let mut bytes = Vec::new();
+        (&file)
+            .take(1_048_577)
+            .read_to_end(&mut bytes)
+            .map_err(GitError::Launch)?;
+        let after = fstat(&file).map_err(|e| GitError::Launch(e.into()))?;
+        if bytes.len() > 1_048_576
+            || before.st_size != after.st_size
+            || before.st_mtime != after.st_mtime
+            || before.st_mtime_nsec != after.st_mtime_nsec
+            || before.st_ctime != after.st_ctime
+            || before.st_ctime_nsec != after.st_ctime_nsec
+        {
+            return Err(GitError::Unavailable("worktree source changed while read"));
+        }
+        return Ok(Some(bytes));
+    }
+    Err(GitError::Parse("worktree source path"))
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn read_worktree_file(_: &Path, _: &str) -> Result<Option<Vec<u8>>, GitError> {
+    Err(GitError::Unavailable(
+        "worktree source reads unsupported on this platform",
     ))
 }

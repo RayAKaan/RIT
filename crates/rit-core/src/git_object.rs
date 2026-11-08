@@ -160,6 +160,12 @@ pub struct SourceFile {
 pub struct SourceSnapshot {
     /// Source commit ID.
     pub commit: ObjectId,
+    /// Snapshot identity: Git commit or a content digest of an observed worktree.
+    pub snapshot_id: String,
+    /// Whether files were observed non-atomically from a worktree.
+    pub non_atomic: bool,
+    /// Description of exact source selection.
+    pub scope: &'static str,
     /// Selected source blobs.
     pub files: Vec<SourceFile>,
     /// Number of source-like symlinks/submodules omitted.

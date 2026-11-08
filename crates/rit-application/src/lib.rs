@@ -221,6 +221,46 @@ impl GitReadService {
             self.git.source_snapshot(path)?,
         )?)
     }
+    /// Analyze a selected immutable Git commit or branch, without worktree overlay.
+    pub fn dependencies_revision(
+        &self,
+        path: &Path,
+        revision: &str,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        Ok(rit_analysis::repository_graph(
+            self.git.source_snapshot_revision(path, Some(revision))?,
+        )?)
+    }
+    /// Analyze current worktree content; this is a non-atomic, incomplete observation.
+    pub fn dependencies_worktree(
+        &self,
+        path: &Path,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        Ok(rit_analysis::repository_graph(
+            self.git.source_snapshot_worktree(path)?,
+        )?)
+    }
+    /// Analyze an identified managed worktree after reconciling it against Git inventory.
+    pub fn dependencies_workspace(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        let state = self.git.workspace_reconcile(repo)?;
+        let w = state
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id)
+            .ok_or(ApplicationError::Git(GitError::Parse(
+                "workspace not found",
+            )))?;
+        if w.observation != "present" {
+            return Err(ApplicationError::Git(GitError::Unavailable(
+                "workspace is not present and ready",
+            )));
+        }
+        self.dependencies_worktree(Path::new(&w.manifest.path))
+    }
     /// Obtain the tracked and untracked working-tree status.
     pub fn status(&self, path: &Path) -> Result<rit_core::repository::Status, ApplicationError> {
         self.inspect(path)?

@@ -82,7 +82,19 @@ pub enum Command {
     Impact {
         #[arg(long)]
         repo: PathBuf,
-        #[arg(long, required = true)]
+        /// Analyze the specified commit rather than HEAD.
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        commit: Option<String>,
+        /// Analyze the specified branch rather than HEAD.
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        branch: Option<String>,
+        /// Analyze non-atomic tracked and untracked worktree source bytes.
+        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        worktree: bool,
+        /// Analyze an identified RIT-managed worktree.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        workspace: Option<String>,
+        #[arg(long)]
         files: Vec<String>,
         #[arg(long)]
         json: bool,
@@ -466,6 +478,18 @@ pub enum DependenciesCommand {
     Inspect {
         #[arg(long)]
         repo: PathBuf,
+        /// Analyze this commit instead of HEAD.
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        commit: Option<String>,
+        /// Analyze this branch instead of HEAD.
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        branch: Option<String>,
+        /// Analyze non-atomic tracked and untracked worktree source bytes.
+        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        worktree: bool,
+        /// Analyze an identified RIT-managed worktree.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        workspace: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -473,6 +497,18 @@ pub enum DependenciesCommand {
     Refresh {
         #[arg(long)]
         repo: PathBuf,
+        /// Analyze this commit instead of HEAD.
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        commit: Option<String>,
+        /// Analyze this branch instead of HEAD.
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        branch: Option<String>,
+        /// Analyze non-atomic tracked and untracked worktree source bytes.
+        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        worktree: bool,
+        /// Analyze an identified RIT-managed worktree.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        workspace: Option<String>,
         #[arg(long)]
         json: bool,
     },

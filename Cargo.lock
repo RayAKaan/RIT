@@ -565,6 +565,7 @@ version = "0.1.0-dev.1"
 dependencies = [
  "rit-core",
  "serde",
+ "sha2",
  "thiserror",
  "tree-sitter",
  "tree-sitter-go",
@@ -623,6 +624,7 @@ dependencies = [
  "rit-core",
  "rustix",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
 ]

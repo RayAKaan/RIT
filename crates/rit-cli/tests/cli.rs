@@ -994,3 +994,232 @@ fn native_watcher_observes_concurrent_changes_in_rit_created_workspaces() {
     assert_eq!(seen, ids);
     assert!(reconciled);
 }
+
+#[test]
+fn analyzes_selected_commits_and_go_module_packages_with_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(r)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Fixture")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir(r.join("pkg")).unwrap();
+    std::fs::write(
+        r.join("go.mod"),
+        "module example.invalid/project\n\ngo 1.23\n",
+    )
+    .unwrap();
+    std::fs::write(
+        r.join("main.go"),
+        "package main\nimport (\"example.invalid/project/pkg\"; \"fmt\")\n",
+    )
+    .unwrap();
+    std::fs::write(r.join("pkg/a.go"), "package pkg\n").unwrap();
+    std::fs::write(r.join("x.py"), "import y\n").unwrap();
+    std::fs::write(r.join("y.py"), "import x\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "first"]);
+    let old = git(&["rev-parse", "HEAD"]);
+    git(&["branch", "old-version"]);
+    std::fs::write(r.join("main.go"), "package main\nimport \"fmt\"\n").unwrap();
+    git(&["add", "main.go"]);
+    git(&["commit", "-qm", "second"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let path = r.to_str().unwrap();
+    let old_graph = run(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        path,
+        "--commit",
+        &old,
+        "--json",
+    ]);
+    assert_eq!(old_graph["graph"]["commit"]["hex"], old);
+    let edges = old_graph["graph"]["edges"].as_array().unwrap();
+    let edge = edges
+        .iter()
+        .find(|e| e["dependent"] == "main.go" && e["dependency"] == "pkg/a.go")
+        .unwrap();
+    assert_eq!(edge["resolution_method"], "go_mod_local_package_files");
+    assert_eq!(edge["snapshot_commit"], old);
+    assert_eq!(edge["source_sha256"].as_str().unwrap().len(), 64);
+    assert!(
+        old_graph["graph"]["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["specifier"] == "fmt")
+    );
+    assert!(
+        old_graph["graph"]["cycles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c.as_array().unwrap().len() == 2)
+    );
+    let by_branch = run(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        path,
+        "--branch",
+        "old-version",
+        "--json",
+    ]);
+    assert_eq!(by_branch["graph"]["commit"]["hex"], old);
+    let current = run(&["dependencies", "inspect", "--repo", path, "--json"]);
+    assert_eq!(current["graph"]["commit"]["hex"], head);
+    assert!(
+        !current["graph"]["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["dependent"] == "main.go")
+    );
+    let impact = run(&[
+        "impact", "--repo", path, "--commit", &old, "--files", "pkg/a.go", "--json",
+    ]);
+    assert!(
+        impact["reports"][0]["known_dependents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "main.go")
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn workspace_analysis_reads_non_atomic_tracked_and_untracked_sources_without_following_symlinks() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("app.py"), "import base\n").unwrap();
+    std::fs::write(repo.join("base.py"), "VALUE=1\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let w = d.path().join("work");
+    let rp = repo.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let m = run(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        w.to_str().unwrap(),
+        "--name",
+        "analysis",
+        "--json",
+    ]);
+    let id = m["workspace"]["id"].as_str().unwrap();
+    let before = run(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--json",
+    ]);
+    std::fs::write(w.join("app.py"), "import extra\n").unwrap();
+    std::fs::write(w.join("extra.py"), "VALUE=2\n").unwrap();
+    std::os::unix::fs::symlink(repo.join("base.py"), w.join("link.py")).unwrap();
+    let after = run(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--json",
+    ]);
+    assert_ne!(
+        before["graph"]["snapshot_id"],
+        after["graph"]["snapshot_id"]
+    );
+    assert_eq!(after["graph"]["non_atomic"], true);
+    assert_eq!(after["graph"]["omitted_non_regular"], 1);
+    assert!(
+        after["graph"]["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["dependent"] == "app.py" && e["dependency"] == "extra.py")
+    );
+    let head = run(&["dependencies", "inspect", "--repo", rp, "--json"]);
+    assert!(
+        !head["graph"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "extra.py")
+    );
+    let impact = run(&["impact", "--repo", rp, "--workspace", id, "--json"]);
+    assert!(impact["reports"].as_array().unwrap().iter().any(|r| {
+        r["changed"] == "extra.py"
+            && r["known_dependents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "app.py")
+    }));
+    assert_eq!(impact["non_atomic"], true);
+}
