@@ -13,6 +13,9 @@ use thiserror::Error;
 /// Registry failures never trigger deletion or recreation of existing data.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// Writable registry and legacy adoption are disabled until the storage security gate passes.
+    #[error("writable registry unavailable: Phase 2.1 storage security gate has not passed")]
+    SecurityGateBlocked,
     /// The selected directory does not meet the storage trust policy.
     #[error("unsafe RIT data directory: {0}")]
     UnsafeDirectory(&'static str),
@@ -33,7 +36,7 @@ pub enum StorageError {
     UnrecognizedDatabase,
     /// Unmarked version-one registry needs explicit owner adoption.
     #[error(
-        "unmarked legacy registry; verify and explicitly adopt it with rit storage adopt-legacy --confirm"
+        "unmarked legacy registry; adoption is unavailable pending safe backup and identity validation"
     )]
     LegacyAdoptionRequired,
     /// Database application ID does not match RIT.
@@ -225,8 +228,9 @@ pub fn verify(dir: &Path) -> Result<Option<StorageVerification>, StorageError> {
         valid_legacy: app == 0 && valid,
     }))
 }
-/// Explicitly claim an exact unmarked Phase 2 v1 schema, preserving its data transactionally.
+/// Legacy adoption is unavailable until identity-bound intent and consistent backup are verified.
 pub fn adopt_legacy(dir: &Path, confirmed: bool) -> Result<(), StorageError> {
+    require_write_gate()?;
     if !confirmed {
         return Err(StorageError::ConfirmationRequired);
     }
@@ -254,14 +258,19 @@ pub fn adopt_legacy(dir: &Path, confirmed: bool) -> Result<(), StorageError> {
     t.commit()?;
     Ok(())
 }
+// No configuration, feature flag, environment variable or test-only path can bypass this gate.
+fn require_write_gate() -> Result<(), StorageError> {
+    Err(StorageError::SecurityGateBlocked)
+}
 /// Local SQLite repository registry.
 pub struct Registry {
     connection: Connection,
     _directory: secure_dir::Guard,
 }
 impl Registry {
-    /// Create/open the database and transactionally migrate schema 0 to schema 1.
+    /// Writable registry creation/open is unavailable until the Phase 2.1 gate passes.
     pub fn open(dir: &Path) -> Result<Self, StorageError> {
+        require_write_gate()?;
         let directory = secure_dir::prepare(dir, true)?
             .ok_or(StorageError::UnsafeDirectory("missing data directory"))?;
         let _lock = directory.lock_initialization()?;

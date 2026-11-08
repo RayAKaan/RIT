@@ -23,3 +23,7 @@ The original commit `0b6b5bb` contains two generated Python `.pyc` files with ma
 ## V3 safety boundaries
 
 Do not claim Phase 2.1 passed. Do not delete journals, open unknown SQLite databases for writing, assume worktrees are security sandboxes, execute arbitrary repository-controlled scripts as a substitute for isolation, or publish protected refs. Read-only observations must preserve sensitive data and limits. Every exposed operation must be explicit about authentication, persistence, concurrency, crash and platform limitations.
+
+## V3 mandatory library fail-closed change
+
+V3 gates both `Registry::open` and `adopt_legacy` before any filesystem or SQLite access, with no bypass flag or test-only provider. This intentionally makes existing writable-registry acceptance fixtures fail earlier: they can no longer create the setup registry through the disabled production API. In particular, the mandatory recovery and substitution tests remain untouched and fail during fixture setup rather than reaching the baseline assertions above. This is **not** a passing substitution or recovery test and does not remediate either defect; the baseline evidence above remains the last full reproduction. Restoring genuine fixture coverage requires a separately reviewed safe test fixture strategy, not reopening the production API or pretending these failures pass.
