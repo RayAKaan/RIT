@@ -105,7 +105,7 @@ fn scoped_mcp_reads_real_repository_and_denies_mutations_and_paths() {
         serde_json::from_str::<serde_json::Value>(&s).unwrap()
     };
     let list = call(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 14);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 15);
     let result = call(
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repository.inspect","arguments":{}}}),
     );
@@ -311,6 +311,23 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let staged_request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"dependencies.index","arguments":{}}});
+    serde_json::to_writer(&mut stdin, &staged_request).unwrap();
+    stdin.write_all(b"\n").unwrap();
+    stdin.flush().unwrap();
+    let mut staged_reply = String::new();
+    stdout.read_line(&mut staged_reply).unwrap();
+    let staged: serde_json::Value = serde_json::from_str(&staged_reply).unwrap();
+    assert!(
+        staged["result"]["structuredContent"]["graph"]["snapshot_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("index-sha256:")
+    );
+    assert_eq!(
+        staged["result"]["structuredContent"]["authenticated"],
+        false
+    );
     for (name, field, id) in [
         ("workspace.list", "reconciliation", workspace.id.to_string()),
         (

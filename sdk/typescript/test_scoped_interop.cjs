@@ -13,7 +13,7 @@ const queue=[];readline.createInterface({input:child.stdout}).on('line',line=>{c
 child.on('error',err=>{for(const pending of queue.splice(0))pending.reject(err);});
 const transport=request=>new Promise((resolve,reject)=>{queue.push({resolve,reject});child.stdin.write(JSON.stringify(request)+'\n');});
 (async()=>{const client=new Client(transport);
-  const list=await client.request('tools/list');assert.equal(list.tools.length,14);
+  const list=await client.request('tools/list');assert.equal(list.tools.length,15);
   for (const [name,field] of [["workspace.list","reconciliation"],["checkpoint.list","content_checkpoints"],["submission.list","submissions"],["candidate.list","candidates"],["workspace.operations","operations"],["checkpoint.restores","restores"],["checkpoint.extractions","extractions"],["submission.reconcile","submissions"]]) {
     const data=(await client.request("tools/call",{name,arguments:{}})).structuredContent;assert.ok(field in data);assert.equal(data.authenticated,false);
   }
