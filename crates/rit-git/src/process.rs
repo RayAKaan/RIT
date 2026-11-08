@@ -77,6 +77,7 @@ pub enum GitError {
 
 type RestoreFiles = Vec<(String, String, bool, Vec<u8>)>;
 type PreparedRestore = (rit_core::checkpoint::RestorePlan, Vec<u8>, RestoreFiles);
+type PreparedExtraction = (rit_core::checkpoint::ExtractionPlan, RestoreFiles);
 
 /// An executable plus limits for typed Git operations.
 #[derive(Debug, Clone)]
@@ -3071,6 +3072,253 @@ impl Git {
                 operation: op,
                 object: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
                 worktree,
+                observation: observation.into(),
+            });
+        }
+        Ok(result)
+    }
+    fn checkpoint_extract_prepare(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+        requested: &[String],
+    ) -> Result<PreparedExtraction, GitError> {
+        if requested.is_empty() || requested.len() > 100 {
+            return Err(GitError::Parse(
+                "select 1..100 exact files or directory prefixes",
+            ));
+        }
+        let (full, _index, files) = self.checkpoint_restore_prepare(repo, id, dest)?;
+        let mut selectors = std::collections::BTreeSet::new();
+        for raw in requested {
+            let p = raw.trim_end_matches('/');
+            validate_checkpoint_path(p)?;
+            if !selectors.insert(p.to_owned()) {
+                return Err(GitError::Parse("duplicate extraction selector"));
+            }
+        }
+        let matches = |path: &str, s: &str| {
+            path == s || path.strip_prefix(s).is_some_and(|r| r.starts_with('/'))
+        };
+        for s in &selectors {
+            if !full
+                .create_paths
+                .iter()
+                .chain(full.deleted_paths.iter())
+                .any(|p| matches(p, s))
+            {
+                return Err(GitError::Parse(
+                    "extraction selector does not match captured paths",
+                ));
+            }
+        }
+        let chosen = files
+            .into_iter()
+            .filter(|(p, _, _, _)| selectors.iter().any(|s| matches(p, s)))
+            .collect::<Vec<_>>();
+        if chosen.is_empty() {
+            return Err(GitError::Unavailable(
+                "selected paths contain only recorded deletions; no content to extract",
+            ));
+        }
+        let selected_paths = chosen.iter().map(|(p, _, _, _)| p.clone()).collect();
+        let deletions = full
+            .deleted_paths
+            .into_iter()
+            .filter(|p| selectors.iter().any(|s| matches(p, s)))
+            .collect();
+        Ok((rit_core::checkpoint::ExtractionPlan{checkpoint:full.checkpoint,destination:full.destination,selected_paths,recorded_deletions:deletions,limitations:vec!["Selected captured raw worktree bytes only; index, staged versions and Git operation state are not extracted".into(),"Destination must be new; existing paths and the original worktree are never intentionally overwritten".into(),"Capture is incomplete, non-atomic and unauthenticated; excluded content cannot be recovered".into(),"Symlink targets are recreated verbatim and may point outside the destination; never followed by RIT".into()]},chosen))
+    }
+    /// Preview extraction of selected recorded files to a new directory.
+    pub fn checkpoint_extract_plan(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+        requested: &[String],
+    ) -> Result<rit_core::checkpoint::ExtractionPlan, GitError> {
+        Ok(self
+            .checkpoint_extract_prepare(repo, id, dest, requested)?
+            .0)
+    }
+    /// Extract selected captured bytes to a new directory, with a persistent cooperative intent.
+    pub fn checkpoint_extract_new(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+        requested: &[String],
+    ) -> Result<rit_core::checkpoint::ExtractionObservation, GitError> {
+        use rit_core::checkpoint::{ExtractionOperation, RestoreId};
+        let (plan, files) = self.checkpoint_extract_prepare(repo, id, dest, requested)?;
+        let format = plan.checkpoint.object.algorithm();
+        let rid = RestoreId::new();
+        let zero = "0".repeat(plan.checkpoint.object.as_hex().len());
+        let reference = format!("refs/rit/extractions/{rid}/manifest");
+        let hold = format!("refs/rit/extractions/{rid}/checkpoint");
+        let mut op=ExtractionOperation{schema_version:1,id:rid,checkpoint:id,checkpoint_object:plan.checkpoint.object.clone(),destination:plan.destination,selected_paths:plan.selected_paths,completed_paths:Vec::new(),current_path:None,state:"created".into(),failure:None,action:"inspect destination and operation before retry; never automatically overwrite or remove".into()};
+        let mut oid = self.write_json_ref(repo, format, &reference, &op, &zero)?;
+        let result = (|| -> Result<(), GitError> {
+            let args = [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "update-ref",
+                hold.as_str(),
+                op.checkpoint_object.as_hex(),
+                zero.as_str(),
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            self.run(Some(repo), &args, "workspace extraction retain checkpoint")?;
+            op.state = "checkpoint_retained".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&op.destination)
+                    .map_err(|source| GitError::Path {
+                        path: PathBuf::from(&op.destination),
+                        source,
+                    })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(GitError::Unavailable("extraction unsupported"));
+            }
+            op.state = "directory_created".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            for (path, kind, exec, bytes) in &files {
+                op.current_path = Some(path.clone());
+                op.state = "writing".into();
+                oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+                restore_create_entry(Path::new(&op.destination), path, kind, *exec, bytes)?;
+                op.completed_paths.push(path.clone());
+                op.current_path = None;
+                oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            }
+            let limit = plan
+                .checkpoint
+                .manifest
+                .capture_limits
+                .as_ref()
+                .map_or(1_048_576, |l| l.max_file_bytes);
+            for (path, kind, exec, bytes) in &files {
+                let actual = read_checkpoint_entry(Path::new(&op.destination), path, limit)?
+                    .ok_or(GitError::Parse("extracted path missing"))?;
+                if actual.0 != kind || actual.1 != *exec || actual.2 != *bytes {
+                    return Err(GitError::Parse("extraction verification failed"));
+                }
+            }
+            op.state = "completed".into();
+            op.action = "selected content verified once; it may change immediately".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            op.failure = Some(format!("{}: {e}", op.state));
+            let _recorded = self.write_json_ref(repo, format, &reference, &op, oid.as_hex());
+            return Err(GitError::Provisioning {
+                id: rid.to_string(),
+            });
+        }
+        self.checkpoint_extractions(repo)?
+            .into_iter()
+            .find(|v| v.operation.id == rid)
+            .ok_or(GitError::Parse("extraction operation missing"))
+    }
+    /// Discover extraction intents without replay or deletion.
+    pub fn checkpoint_extractions(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::ExtractionObservation>, GitError> {
+        use rit_core::{
+            checkpoint::{ExtractionObservation, ExtractionOperation},
+            git_object::ObjectId,
+        };
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/extractions/",
+            ],
+            "workspace extraction refs",
+        )?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 {
+                return Err(GitError::Parse("extraction ref"));
+            }
+            if f[0].ends_with("/checkpoint") {
+                continue;
+            }
+            if f[2] != "blob" {
+                return Err(GitError::Parse("extraction manifest ref"));
+            }
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace extraction manifest",
+            )?;
+            if raw.len() > 1_048_576 {
+                return Err(GitError::OutputLimit);
+            }
+            let op: ExtractionOperation =
+                serde_json::from_slice(&raw).map_err(|_| GitError::Parse("extraction manifest"))?;
+            if op.schema_version != 1
+                || f[0] != format!("refs/rit/extractions/{}/manifest", op.id)
+                || op.checkpoint_object.algorithm() != format
+                || !Path::new(&op.destination).is_absolute()
+                || op.selected_paths.len() > 2000
+                || op.completed_paths.len() > op.selected_paths.len()
+                || !matches!(
+                    op.state.as_str(),
+                    "created"
+                        | "checkpoint_retained"
+                        | "directory_created"
+                        | "writing"
+                        | "completed"
+                )
+            {
+                return Err(GitError::Parse("extraction manifest claims"));
+            }
+            for p in op
+                .selected_paths
+                .iter()
+                .chain(op.completed_paths.iter())
+                .chain(op.current_path.iter())
+            {
+                validate_checkpoint_path(p)?
+            }
+            let pin = format!("refs/rit/extractions/{}/checkpoint", op.id);
+            let pinned = refs.lines().any(|line| {
+                let fields = line.split('\0').collect::<Vec<_>>();
+                fields.len() == 3
+                    && fields[0] == pin
+                    && fields[1] == op.checkpoint_object.as_hex()
+                    && fields[2] == "commit"
+            });
+            let dir = std::fs::symlink_metadata(&op.destination)
+                .ok()
+                .is_some_and(|m| m.file_type().is_dir());
+            let observation = if !pinned {
+                "checkpoint_ref_missing_or_mismatch"
+            } else if !dir {
+                "destination_missing_or_not_directory"
+            } else if op.state != "completed" {
+                "interrupted_manual_recovery_required"
+            } else {
+                "completed_directory_inventory_only"
+            };
+            result.push(ExtractionObservation {
+                operation: op,
+                object: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
                 observation: observation.into(),
             });
         }

@@ -354,6 +354,33 @@ impl GitCheckpointService {
             limits,
         )?)
     }
+    /// Preview selected captured worktree content into an absent directory.
+    pub fn extract_plan(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+        paths: &[String],
+    ) -> Result<rit_core::checkpoint::ExtractionPlan, ApplicationError> {
+        Ok(self.git.checkpoint_extract_plan(repo, id, dest, paths)?)
+    }
+    /// Export selected captured content without modifying original files.
+    pub fn extract_new(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+        paths: &[String],
+    ) -> Result<rit_core::checkpoint::ExtractionObservation, ApplicationError> {
+        Ok(self.git.checkpoint_extract_new(repo, id, dest, paths)?)
+    }
+    /// Inspect extraction intents without retrying or cleaning up.
+    pub fn extractions(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::ExtractionObservation>, ApplicationError> {
+        Ok(self.git.checkpoint_extractions(repo)?)
+    }
     /// List unauthenticated content checkpoints.
     pub fn list_content(
         &self,

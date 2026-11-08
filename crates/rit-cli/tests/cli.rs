@@ -3401,3 +3401,339 @@ fn failed_post_creation_integrity_check_reports_partial_candidate_without_deleti
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), target);
     assert_eq!(git(&work, &["rev-parse", "HEAD"]), source);
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn checkpoint_extracts_selected_file_or_directory_without_touching_newer_work() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::create_dir(repo.join("dir")).unwrap();
+    std::fs::write(repo.join("dir/a"), "base-a\n").unwrap();
+    std::fs::write(repo.join("dir/b"), "base-b\n").unwrap();
+    std::fs::write(repo.join("other"), "other\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{a:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "extract",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("dir/a"), "captured-a\n").unwrap();
+    std::fs::write(work.join("dir/b"), "captured-b\n").unwrap();
+    git(&work, &["add", "dir/a"]);
+    std::fs::write(work.join("dir/a"), "unstaged-a\n").unwrap();
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let id = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    std::fs::write(work.join("dir/a"), "newer-a\n").unwrap();
+    std::fs::write(work.join("unrelated-new"), "keep\n").unwrap();
+    let dest = d.path().join("one");
+    let plan = cli(&[
+        "checkpoint",
+        "extract",
+        id,
+        "--repo",
+        rp,
+        "--to",
+        dest.to_str().unwrap(),
+        "--path",
+        "dir/a",
+        "--preview",
+        "--json",
+    ]);
+    assert_eq!(plan["plan"]["selected_paths"].as_array().unwrap().len(), 1);
+    assert!(!dest.exists());
+    let no = run(
+        &[
+            "checkpoint",
+            "extract",
+            id,
+            "--repo",
+            rp,
+            "--to",
+            dest.to_str().unwrap(),
+            "--path",
+            "dir/a",
+            "--yes",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!no.status.success());
+    assert!(!dest.exists());
+    let x = cli(&[
+        "checkpoint",
+        "extract",
+        id,
+        "--repo",
+        rp,
+        "--to",
+        dest.to_str().unwrap(),
+        "--path",
+        "dir/a",
+        "--yes",
+        "--accept-incomplete",
+        "--json",
+    ]);
+    assert_eq!(x["extraction"]["operation"]["state"], "completed");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("dir/a")).unwrap(),
+        "unstaged-a\n"
+    );
+    assert!(!dest.join("dir/b").exists());
+    assert!(!dest.join("other").exists());
+    assert!(!dest.join(".git").exists());
+    assert_eq!(
+        std::fs::read_to_string(work.join("dir/a")).unwrap(),
+        "newer-a\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("unrelated-new")).unwrap(),
+        "keep\n"
+    );
+    let again = run(
+        &[
+            "checkpoint",
+            "extract",
+            id,
+            "--repo",
+            rp,
+            "--to",
+            dest.to_str().unwrap(),
+            "--path",
+            "dir/a",
+            "--yes",
+            "--accept-incomplete",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!again.status.success());
+    assert_eq!(
+        std::fs::read_to_string(dest.join("dir/a")).unwrap(),
+        "unstaged-a\n"
+    );
+    let dir = d.path().join("directory");
+    cli(&[
+        "checkpoint",
+        "extract",
+        id,
+        "--repo",
+        rp,
+        "--to",
+        dir.to_str().unwrap(),
+        "--path",
+        "dir/",
+        "--yes",
+        "--accept-incomplete",
+        "--json",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dir/b")).unwrap(),
+        "captured-b\n"
+    );
+    assert!(!dir.join("other").exists());
+    let invalid = run(
+        &[
+            "checkpoint",
+            "extract",
+            id,
+            "--repo",
+            rp,
+            "--to",
+            d.path().join("bad").to_str().unwrap(),
+            "--path",
+            "../other",
+            "--preview",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!invalid.status.success());
+    // Simulate another writer placing a destination file after the exclusive directory
+    // reservation and before RIT writes the selected entry.
+    let collision = d.path().join("collision");
+    let wrapper = d.path().join("inject-extraction-collision");
+    std::fs::write(&wrapper,"#!/bin/sh\nif [ -d \"$V6_DEST\" ] && [ ! -f \"$V6_MARK\" ]; then printf 'newer concurrent\\n' > \"$V6_DEST/other\"; printf x > \"$V6_MARK\"; fi\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let failed = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .env("V6_DEST", &collision)
+        .env("V6_MARK", d.path().join("marked"))
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "checkpoint",
+            "extract",
+            id,
+            "--repo",
+            rp,
+            "--to",
+            collision.to_str().unwrap(),
+            "--path",
+            "other",
+            "--yes",
+            "--accept-incomplete",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert_eq!(
+        std::fs::read_to_string(collision.join("other")).unwrap(),
+        "newer concurrent\n"
+    );
+    let list = cli(&["checkpoint", "extractions", "--repo", rp, "--json"]);
+    assert_eq!(list["extractions"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        list["extractions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| x["observation"] == "completed_directory_inventory_only")
+            .count(),
+        2
+    );
+    assert_eq!(
+        list["extractions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| x["observation"] == "interrupted_manual_recovery_required")
+            .count(),
+        1
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn interrupted_checkpoint_extraction_is_discoverable_and_never_cleaned_up() {
+    use std::os::unix::{fs::PermissionsExt, process::ExitStatusExt};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success())
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("a"), "base-a\n").unwrap();
+    std::fs::write(repo.join("b"), "base-b\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "interrupt",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("a"), "important\n").unwrap();
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let id = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    let dest = d.path().join("partial");
+    let wrapper = d.path().join("kill-after-a");
+    std::fs::write(&wrapper,"#!/bin/sh\nif [ -f \"$V6_DEST/a\" ]; then case \"$*\" in *\"update-ref refs/rit/extractions/\"*) kill -KILL \"$PPID\"; exit 97;; esac; fi\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .env("V6_DEST", &dest)
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "checkpoint",
+            "extract",
+            id,
+            "--repo",
+            rp,
+            "--to",
+            dest.to_str().unwrap(),
+            "--path",
+            "a",
+            "--path",
+            "b",
+            "--yes",
+            "--accept-incomplete",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.signal(), Some(9));
+    assert_eq!(
+        std::fs::read_to_string(dest.join("a")).unwrap(),
+        "important\n"
+    );
+    let all = cli(&["checkpoint", "extractions", "--repo", rp, "--json"]);
+    let e = &all["extractions"][0];
+    assert_eq!(e["observation"], "interrupted_manual_recovery_required");
+    assert_eq!(e["operation"]["current_path"], "a");
+    assert_eq!(
+        std::fs::read_to_string(work.join("a")).unwrap(),
+        "important\n"
+    );
+    assert!(dest.exists());
+}

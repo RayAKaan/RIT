@@ -825,6 +825,50 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             }
         }
         Command::Checkpoint {
+            command:
+                CheckpointCommand::Extract {
+                    id,
+                    repo,
+                    to,
+                    path,
+                    preview,
+                    yes,
+                    accept_incomplete,
+                    json,
+                },
+        } => {
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid checkpoint ID".into()))?;
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            if preview {
+                let plan = service
+                    .extract_plan(&repo, id, &to, &path)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                output::value(&serde_json::json!({"schema_version":1,"plan":plan,"destination_modified":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+            } else if yes && accept_incomplete {
+                let result = service
+                    .extract_new(&repo, id, &to, &path)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                output::value(&serde_json::json!({"schema_version":1,"extraction":result,"complete":false,"authenticated":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+            } else {
+                Err((RUNTIME_FAILURE,"selected extraction requires --yes and --accept-incomplete; use --preview first".into()))
+            }
+        }
+        Command::Checkpoint {
+            command: CheckpointCommand::Extractions { repo, json },
+        } => {
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let operations = service
+                .extractions(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(&serde_json::json!({"schema_version":1,"extractions":operations,"authenticated":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+        }
+        Command::Checkpoint {
             command: CheckpointCommand::Restores { repo, json },
         } => {
             let service = rit_application::GitCheckpointService::new(

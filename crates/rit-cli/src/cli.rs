@@ -524,6 +524,32 @@ pub enum CheckpointCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Export selected captured worktree files into a new directory, never in place.
+    Extract {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        to: PathBuf,
+        /// Exact file or captured directory prefix, repeatable.
+        #[arg(long, required = true)]
+        path: Vec<String>,
+        #[arg(long)]
+        preview: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        accept_incomplete: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect extraction operations without replay or cleanup.
+    Extractions {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// List and reconcile recovery operations without changing them.
     Restores {
         #[arg(long)]

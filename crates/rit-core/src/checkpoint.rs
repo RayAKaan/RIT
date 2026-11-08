@@ -353,3 +353,55 @@ pub struct CheckpointSupplementaryEvidence {
     /// Limits and absence of nested-content preservation.
     pub limitations: Vec<&'static str>,
 }
+
+/// Preview of selected captured worktree content exported to an absent directory.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExtractionPlan {
+    /// Checkpoint and explicitly incomplete coverage.
+    pub checkpoint: ContentCheckpointRecord,
+    /// New destination directory, outside all known worktrees.
+    pub destination: String,
+    /// Captured file or symlink paths selected by the user.
+    pub selected_paths: Vec<String>,
+    /// Captured deletions under the selection; no path is deleted.
+    pub recorded_deletions: Vec<String>,
+    /// This exports raw worktree content, not index or Git operation state.
+    pub limitations: Vec<String>,
+}
+/// Cooperative extraction intent; not authenticated and not a filesystem transaction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtractionOperation {
+    /// Schema version.
+    pub schema_version: u32,
+    /// Opaque operation identifier.
+    pub id: RestoreId,
+    /// Referenced checkpoint ID.
+    pub checkpoint: CheckpointId,
+    /// Exact pinned checkpoint commit.
+    pub checkpoint_object: crate::git_object::ObjectId,
+    /// New destination directory.
+    pub destination: String,
+    /// Selected captured paths.
+    pub selected_paths: Vec<String>,
+    /// Paths durably recorded as written; actual filesystem may be ahead.
+    pub completed_paths: Vec<String>,
+    /// Path currently being written, if any.
+    pub current_path: Option<String>,
+    /// Last persisted state.
+    pub state: String,
+    /// Failure if its metadata update succeeded.
+    pub failure: Option<String>,
+    /// Safe operator action.
+    pub action: String,
+}
+/// Extraction state reconciled against current directory presence only.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExtractionObservation {
+    /// Unauthenticated operation record.
+    pub operation: ExtractionOperation,
+    /// CAS object identity.
+    pub object: crate::git_object::ObjectId,
+    /// Inventory-only classification; no current content verification is implied.
+    pub observation: String,
+}
