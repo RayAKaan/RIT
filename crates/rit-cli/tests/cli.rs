@@ -596,3 +596,286 @@ fn activity_polling_observes_five_real_git_worktrees_and_overlap() {
     assert!(child.wait().unwrap().success());
     assert!(!d.path().join("none").exists());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn creates_and_reconciles_five_actual_rit_workspaces() {
+    use std::collections::HashSet;
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Fixture")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("shared.py"), "VALUE = 1\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::write(&hook, "#!/bin/sh\ntouch executed-hook\n").unwrap();
+    std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let data = d.path().join("no-registry");
+    let cli = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .arg("--data-dir")
+            .arg(&data)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let rp = repo.to_str().unwrap();
+    let mut ids = HashSet::new();
+    let mut branches = HashSet::new();
+    let mut commits = HashSet::new();
+    let mut worktrees = Vec::new();
+    for n in 0..5 {
+        let w = d.path().join(format!("work{n}"));
+        let p = w.to_str().unwrap();
+        let name = format!("workspace {n}");
+        let created = cli(&[
+            "workspace",
+            "create",
+            "--repo",
+            rp,
+            "--path",
+            p,
+            "--name",
+            &name,
+            "--base",
+            "HEAD",
+            "--json",
+        ]);
+        let m = &created["workspace"];
+        assert_eq!(m["state"], "ready");
+        assert_eq!(m["base"]["hex"], head);
+        assert!(ids.insert(m["id"].as_str().unwrap().to_owned()));
+        assert!(branches.insert(m["branch"].as_str().unwrap().to_owned()));
+        assert_eq!(
+            std::fs::read_to_string(w.join("shared.py")).unwrap(),
+            "VALUE = 1\n"
+        );
+        std::fs::write(w.join(format!("file{n}.py")), format!("VALUE={n}\n")).unwrap();
+        std::fs::write(w.join("shared.py"), format!("VALUE={n}\n")).unwrap();
+        git(&w, &["-c", "core.hooksPath=/dev/null", "add", "."]);
+        git(
+            &w,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "-qm",
+                &format!("change {n}"),
+            ],
+        );
+        commits.insert(git(&w, &["rev-parse", "HEAD"]));
+        let info = cli(&[
+            "workspace",
+            "inspect",
+            m["id"].as_str().unwrap(),
+            "--repo",
+            rp,
+            "--json",
+        ]);
+        assert_eq!(info["workspace"]["observation"], "present");
+        worktrees.push((w, m["id"].as_str().unwrap().to_owned()));
+    }
+    assert_eq!(ids.len(), 5);
+    assert_eq!(branches.len(), 5);
+    assert_eq!(commits.len(), 5);
+    assert!(!repo.join("executed-hook").exists());
+    let listing = cli(&["workspace", "list", "--repo", rp, "--json"]);
+    assert_eq!(
+        listing["reconciliation"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    let id = &worktrees[0].1;
+    cli(&[
+        "workspace",
+        "lock",
+        id,
+        "--repo",
+        rp,
+        "--reason",
+        "fixture",
+        "--json",
+    ]);
+    let locked = cli(&["workspace", "status", id, "--repo", rp, "--json"]);
+    assert_eq!(locked["workspace"]["worktree"]["locked"], true);
+    cli(&["workspace", "unlock", id, "--repo", rp, "--json"]);
+    std::fs::write(worktrees[0].0.join("untracked"), "preserve").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args(["workspace", "remove", id, "--repo", rp])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(
+        std::fs::read_to_string(worktrees[0].0.join("untracked")).unwrap(),
+        "preserve"
+    );
+    // Simulate a moved worktree and an interrupted manifest after the workspaces
+    // were created by RIT; reconciliation must report, never delete, either.
+    let moved = d.path().join("moved-worktree");
+    git(
+        &repo,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "worktree",
+            "move",
+            worktrees[1].0.to_str().unwrap(),
+            moved.to_str().unwrap(),
+        ],
+    );
+    let interrupted_id = &worktrees[2].1;
+    let current = cli(&[
+        "workspace",
+        "inspect",
+        interrupted_id,
+        "--repo",
+        rp,
+        "--json",
+    ]);
+    let mut manifest = current["workspace"]["manifest"].clone();
+    manifest["state"] = "provisioning".into();
+    let fixture = d.path().join("interrupted-manifest.json");
+    std::fs::write(&fixture, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let oid = git(
+        &repo,
+        &[
+            "hash-object",
+            "-w",
+            "--no-filters",
+            fixture.to_str().unwrap(),
+        ],
+    );
+    let manifest_ref = format!("refs/rit/workspaces/{interrupted_id}/manifest");
+    git(
+        &repo,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            &manifest_ref,
+            &oid,
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            "refs/heads/rit/workspaces/orphan",
+            &head,
+        ],
+    );
+    let final_state = cli(&["workspace", "reconcile", "--repo", rp, "--json"]);
+    let ws = final_state["reconciliation"]["workspaces"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        ws.iter()
+            .find(|v| v["manifest"]["id"] == worktrees[1].1)
+            .unwrap()["observation"],
+        "moved"
+    );
+    assert_eq!(
+        ws.iter()
+            .find(|v| v["manifest"]["id"] == *interrupted_id)
+            .unwrap()["observation"],
+        "interrupted"
+    );
+    assert_eq!(
+        final_state["reconciliation"]["orphan_branches"][0],
+        "refs/heads/rit/workspaces/orphan"
+    );
+    assert!(moved.exists());
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+    assert!(!data.exists());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn filtered_workspace_is_real_but_explicitly_not_checked_out() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Fixture")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join(".gitattributes"), "*.txt filter=bad\n").unwrap();
+    std::fs::write(repo.join("example.txt"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let marker = d.path().join("filter-executed");
+    let filter = format!("sh -c 'touch {}; cat'", marker.display());
+    git(&["config", "filter.bad.smudge", &filter]);
+    git(&["config", "filter.bad.clean", &filter]);
+    let target = d.path().join("work");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args([
+            "workspace",
+            "create",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--path",
+            target.to_str().unwrap(),
+            "--name",
+            "filtered",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["workspace"]["state"], "no_checkout");
+    assert!(!marker.exists());
+    assert!(target.join(".git").exists());
+    assert!(!target.join("example.txt").exists());
+}

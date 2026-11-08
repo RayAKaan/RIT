@@ -514,6 +514,8 @@ version = "0.1.0-dev.1"
 dependencies = [
  "command-group",
  "rit-core",
+ "rustix",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

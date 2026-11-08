@@ -102,7 +102,7 @@ pub enum Command {
         #[command(subcommand)]
         command: CheckpointCommand,
     },
-    /// Workspace operations (currently unavailable).
+    /// Git-native cooperative workspace operations; not an isolation boundary.
     Workspace {
         #[command(subcommand)]
         command: WorkspaceCommand,
@@ -326,14 +326,73 @@ pub enum AuditCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
-    /// Create a workspace; disabled.
-    Create { repository: String },
-    /// List workspaces; disabled.
-    List,
-    /// Inspect a workspace; disabled.
-    Status { id: String },
-    /// Plan workspace removal; disabled.
-    Remove { id: String },
+    /// Create a Git worktree and a Git-ref-backed coordination manifest.
+    Create {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "HEAD")]
+        base: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List managed workspace observations.
+    List {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reconcile manifests and branch/worktree inventory.
+    Reconcile {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a managed workspace.
+    Inspect {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a managed workspace and its live status.
+    Status {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lock its actual Git worktree.
+    Lock {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Unlock its actual Git worktree.
+    Unlock {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Removal is disabled until non-destructive handling is verified.
+    Remove {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {

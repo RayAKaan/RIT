@@ -21,6 +21,9 @@ pub enum GitError {
     /// The operation is not available on this platform or before validation.
     #[error("operation unavailable: {0}")]
     Unavailable(&'static str),
+    /// Creation was interrupted after a durable provisioning manifest was reserved.
+    #[error("workspace {id} provisioning interrupted; reconcile before retrying")]
+    Provisioning { id: String },
     /// Git executable was unavailable or could not be spawned.
     #[error("cannot start Git executable: {0}")]
     Launch(#[source] io::Error),
@@ -162,7 +165,8 @@ impl Git {
     ) -> Result<Vec<u8>, GitError> {
         // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
         // Fail closed unless the Linux x86-64 child-process restriction can be installed.
-        let restricted = matches!(operation, "status" | "diff");
+        let restricted =
+            matches!(operation, "status" | "diff") || operation.starts_with("workspace ");
         let _filter = if restricted {
             Some(no_child_filter()?)
         } else {
@@ -646,6 +650,480 @@ impl Git {
             omitted_non_regular: omitted,
         })
     }
+    /// Create a bounded Git-native workspace, never invoking checkout filters or hooks.
+    /// Linux x86-64 only; unsupported content is left in a no-checkout worktree.
+    pub fn workspace_create(
+        &self,
+        repo: &Path,
+        dest: &Path,
+        name: &str,
+        base: &str,
+    ) -> Result<rit_core::workspace::WorkspaceManifest, GitError> {
+        use rit_core::{
+            git_object::ObjectId,
+            workspace::{WorkspaceId, WorkspaceManifest},
+        };
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "managed workspace writes are not validated on this platform",
+            ));
+        }
+        if name.is_empty() || name.len() > 100 || name.chars().any(|c| c.is_control()) {
+            return Err(GitError::Parse("invalid workspace name"));
+        }
+        if base.is_empty() || base.len() > 256 || base.contains('\0') {
+            return Err(GitError::Parse("invalid base reference"));
+        }
+        let ins = self.inspect(repo)?;
+        let root = ins
+            .worktree
+            .as_deref()
+            .ok_or(GitError::Unavailable("bare repository workspace creation"))?;
+        let cwd = Path::new(root);
+        let format = self.object_format(cwd)?;
+        let oid = self.query(
+            cwd,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{base}^{{commit}}"),
+            ],
+            "workspace base",
+        )?;
+        let commit = ObjectId::new(format, &oid).map_err(GitError::Parse)?;
+        let target = workspace_target(dest)?;
+        let common = Path::new(&ins.common_git_dir);
+        let main = Path::new(root);
+        if target.starts_with(main)
+            || main.starts_with(&target)
+            || target.starts_with(common)
+            || common.starts_with(&target)
+        {
+            return Err(GitError::Parse(
+                "workspace path overlaps repository or Git directory",
+            ));
+        }
+        let inventory = self.worktrees(cwd)?;
+        for w in inventory {
+            let p = Path::new(&w.path);
+            if target.starts_with(p) || p.starts_with(&target) {
+                return Err(GitError::Parse("workspace path overlaps existing worktree"));
+            }
+        }
+        let id = WorkspaceId::new();
+        let branch = format!("refs/heads/rit/workspaces/{id}");
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| GitError::Parse("system clock before Unix epoch"))?
+            .as_secs();
+        let mut manifest = WorkspaceManifest {
+            schema_version: 1,
+            id,
+            name: name.into(),
+            path: target.to_str().ok_or(GitError::NonUnicode)?.into(),
+            branch: branch.clone(),
+            base: commit.clone(),
+            created_at,
+            state: "provisioning".into(),
+            limitation: None,
+        };
+        let zero = "0".repeat(commit.as_hex().len());
+        let old = self.workspace_write_manifest(cwd, &manifest, &zero)?;
+        let action = (|| -> Result<(), GitError> {
+            let args = [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "update-ref",
+                branch.as_str(),
+                commit.as_hex(),
+                zero.as_str(),
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            self.run(Some(cwd), &args, "workspace branch")?;
+            // Exclusive private directory; Git accepts an existing empty directory.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&target)
+                    .map_err(|source| GitError::Path {
+                        path: target.clone(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(GitError::Unavailable(
+                    "workspace path validation unavailable",
+                ));
+            }
+            let args = vec![
+                "-c".into(),
+                "core.hooksPath=/dev/null".into(),
+                "worktree".into(),
+                "add".into(),
+                "--no-checkout".into(),
+                target.as_os_str().into(),
+                branch
+                    .strip_prefix("refs/heads/")
+                    .ok_or(GitError::Parse("branch ref"))?
+                    .into(),
+            ];
+            self.run(Some(cwd), &args, "workspace worktree add")?;
+            let actual = self
+                .worktrees(cwd)?
+                .into_iter()
+                .find(|w| w.path == manifest.path)
+                .ok_or(GitError::Parse("created worktree missing"))?;
+            if actual.branch.as_deref() != Some(branch.as_str())
+                || actual.head.as_ref() != Some(&commit)
+            {
+                return Err(GitError::Parse("created worktree mismatch"));
+            }
+            match self.workspace_materialize(&target, &commit) {
+                Ok(()) => {
+                    manifest.state = "ready".into();
+                }
+                Err(GitError::Unavailable(reason)) => {
+                    manifest.state = "no_checkout".into();
+                    manifest.limitation = Some(reason.into());
+                }
+                Err(e) => return Err(e),
+            }
+            self.workspace_write_manifest(cwd, &manifest, old.as_hex())?;
+            Ok(())
+        })();
+        if action.is_err() {
+            return Err(GitError::Provisioning { id: id.to_string() });
+        }
+        Ok(manifest)
+    }
+    fn workspace_write_manifest(
+        &self,
+        cwd: &Path,
+        m: &rit_core::workspace::WorkspaceManifest,
+        old: &str,
+    ) -> Result<rit_core::git_object::ObjectId, GitError> {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
+        serde_json::to_writer(&mut f, m).map_err(|_| GitError::Parse("manifest serialization"))?;
+        f.flush().map_err(GitError::Launch)?;
+        let args = vec![
+            "hash-object".into(),
+            "-w".into(),
+            "--no-filters".into(),
+            f.path().as_os_str().into(),
+        ];
+        let out = self.run(Some(cwd), &args, "workspace manifest object")?;
+        let oid = std::str::from_utf8(&out)
+            .map_err(|_| GitError::NonUnicode)?
+            .trim_end();
+        let oid = rit_core::git_object::ObjectId::new(m.base.algorithm(), oid)
+            .map_err(GitError::Parse)?;
+        let reference = format!("refs/rit/workspaces/{}/manifest", m.id);
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            reference.as_str(),
+            oid.as_hex(),
+            old,
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(cwd), &args, "workspace manifest ref")?;
+        Ok(oid)
+    }
+    fn workspace_materialize(
+        &self,
+        worktree: &Path,
+        commit: &rit_core::git_object::ObjectId,
+    ) -> Result<(), GitError> {
+        // Read only Git objects, never checkout/smudge. Reject transformed or special files.
+        let args = ["ls-tree", "-r", "-z", "--full-tree", commit.as_hex()]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let entries = self.run(Some(worktree), &args, "workspace tree")?;
+        let mut files: Vec<(String, String, bool, Vec<u8>)> = Vec::new();
+        let mut total = 0usize;
+        for entry in entries.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+            let tab = entry
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or(GitError::Parse("tree entry"))?;
+            let meta = std::str::from_utf8(&entry[..tab]).map_err(|_| GitError::NonUnicode)?;
+            let mut m = meta.split(' ');
+            let mode = m.next().unwrap_or("");
+            let kind = m.next().unwrap_or("");
+            let oid = m.next().unwrap_or("");
+            if m.next().is_some() || kind != "blob" || !matches!(mode, "100644" | "100755") {
+                return Err(GitError::Unavailable(
+                    "symlinks, submodules and non-regular tree entries require no-checkout",
+                ));
+            }
+            let object = rit_core::git_object::ObjectId::new(commit.algorithm(), oid)
+                .map_err(GitError::Parse)?;
+            let path = std::str::from_utf8(&entry[tab + 1..])
+                .map_err(|_| GitError::NonUnicode)?
+                .to_owned();
+            if path.len() > 4096
+                || Path::new(&path).components().any(|c| match c {
+                    std::path::Component::Normal(x) => {
+                        x.to_string_lossy().eq_ignore_ascii_case(".git")
+                    }
+                    _ => true,
+                })
+            {
+                return Err(GitError::Unavailable("unsupported tree path"));
+            }
+            if files.len() >= 500 {
+                return Err(GitError::Unavailable(
+                    "more than 500 files require no-checkout",
+                ));
+            }
+            let size = self
+                .query(
+                    worktree,
+                    &["cat-file", "-s", object.as_hex()],
+                    "workspace blob size",
+                )?
+                .parse::<usize>()
+                .map_err(|_| GitError::Parse("blob size"))?;
+            total = total.checked_add(size).ok_or(GitError::OutputLimit)?;
+            if size > 1024 * 1024 || total > 8 * 1024 * 1024 {
+                return Err(GitError::Unavailable(
+                    "tree exceeds materialization size limits",
+                ));
+            }
+            let data = self.run(
+                Some(worktree),
+                &["cat-file".into(), "blob".into(), object.as_hex().into()],
+                "workspace blob",
+            )?;
+            if data.len() != size {
+                return Err(GitError::Parse("blob size mismatch"));
+            }
+            files.push((path, oid.into(), mode == "100755", data));
+        }
+        // Reject configured filters even when unused; do not run them. Query effective
+        // repository config and attributes, including info/attributes.
+        let config = self.run(
+            Some(worktree),
+            &[
+                "config".into(),
+                "--null".into(),
+                "--get-regexp".into(),
+                r"^filter\..*\.(clean|smudge|process)$".into(),
+            ],
+            "workspace filter config",
+        );
+        match config {
+            Ok(data) if !data.is_empty() => {
+                return Err(GitError::Unavailable(
+                    "external filter configuration requires no-checkout",
+                ));
+            }
+            Ok(_) | Err(GitError::Exit { code: Some(1), .. }) => (),
+            Err(e) => return Err(e),
+        }
+        let autocrlf = self.query(
+            worktree,
+            &["config", "--get", "core.autocrlf"],
+            "workspace autocrlf",
+        );
+        match autocrlf {
+            Ok(v) if v != "false" => {
+                return Err(GitError::Unavailable("core.autocrlf requires no-checkout"));
+            }
+            Ok(_) | Err(GitError::Exit { code: Some(1), .. }) => (),
+            Err(e) => return Err(e),
+        }
+        if !files.is_empty() {
+            let mut args = vec![
+                OsString::from("check-attr"),
+                "-z".into(),
+                "--source".into(),
+                commit.as_hex().into(),
+                "filter".into(),
+                "working-tree-encoding".into(),
+                "ident".into(),
+                "text".into(),
+                "eol".into(),
+                "--".into(),
+            ];
+            if files.iter().map(|x| x.0.len()).sum::<usize>() > 64 * 1024 {
+                return Err(GitError::Unavailable("tree path list exceeds limit"));
+            }
+            args.extend(files.iter().map(|x| OsString::from(&x.0)));
+            let attrs = self.run(Some(worktree), &args, "workspace attributes")?;
+            let parts = attrs.split(|b| *b == 0).collect::<Vec<_>>();
+            if parts.len() != files.len() * 5 * 3 + 1 {
+                return Err(GitError::Parse("attribute response"));
+            }
+            for triple in parts[..parts.len() - 1].chunks(3) {
+                if triple[2] != b"unspecified" && triple[2] != b"unset" {
+                    return Err(GitError::Unavailable(
+                        "checkout-affecting attributes require no-checkout",
+                    ));
+                }
+            }
+        }
+        self.run(
+            Some(worktree),
+            &["read-tree".into(), commit.as_hex().into()],
+            "workspace index",
+        )?;
+        materialize_files(worktree, files)?;
+        Ok(())
+    }
+    /// Reconcile manifest claims with real Git branch and worktree inventory.
+    pub fn workspace_reconcile(
+        &self,
+        repo: &Path,
+    ) -> Result<rit_core::workspace::WorkspaceReconciliation, GitError> {
+        use rit_core::{
+            git_object::ObjectId,
+            workspace::{ManagedWorkspaceObservation, WorkspaceManifest, WorkspaceReconciliation},
+        };
+        let cwd = repo.canonicalize().map_err(|source| GitError::Path {
+            path: repo.into(),
+            source,
+        })?;
+        let format = self.object_format(&cwd)?;
+        let worktrees = self.worktrees(&cwd)?;
+        let text = self.query(
+            &cwd,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/workspaces/",
+            ],
+            "workspace manifests",
+        )?;
+        let mut observations = Vec::new();
+        let mut branches = std::collections::BTreeSet::new();
+        for line in text.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 || f[2] != "blob" {
+                return Err(GitError::Parse("workspace manifest ref"));
+            }
+            let raw = self.run(
+                Some(&cwd),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace read manifest",
+            )?;
+            if raw.len() > 16 * 1024 {
+                return Err(GitError::Parse("manifest too large"));
+            }
+            let m: WorkspaceManifest = serde_json::from_slice(&raw)
+                .map_err(|_| GitError::Parse("invalid workspace manifest"))?;
+            if m.schema_version != 1
+                || f[0] != format!("refs/rit/workspaces/{}/manifest", m.id)
+                || m.branch != format!("refs/heads/rit/workspaces/{}", m.id)
+                || m.base.algorithm() != format
+                || !matches!(m.state.as_str(), "provisioning" | "ready" | "no_checkout")
+                || !Path::new(&m.path).is_absolute()
+            {
+                return Err(GitError::Parse("invalid workspace manifest claims"));
+            }
+            branches.insert(m.branch.clone());
+            let w = worktrees
+                .iter()
+                .find(|w| w.branch.as_deref() == Some(&m.branch))
+                .cloned();
+            let observation = match &w {
+                None => "missing",
+                Some(w) if w.path != m.path => "moved",
+                Some(w) if w.prunable => "prunable",
+                Some(_) if m.state == "provisioning" => "interrupted",
+                Some(_) if m.state == "no_checkout" => "no_checkout",
+                Some(_) => "present",
+            }
+            .to_string();
+            let status = if observation == "present" {
+                self.inspect(Path::new(&m.path)).ok().and_then(|i| i.status)
+            } else {
+                None
+            };
+            observations.push(ManagedWorkspaceObservation {
+                manifest: m,
+                manifest_oid: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
+                worktree: w,
+                observation,
+                status,
+            });
+        }
+        let refs = self.query(
+            &cwd,
+            &[
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/heads/rit/workspaces/",
+            ],
+            "workspace branches",
+        )?;
+        let orphan_branches = refs
+            .lines()
+            .filter(|b| !branches.contains(*b))
+            .map(str::to_owned)
+            .collect();
+        let unclaimed_worktrees = worktrees
+            .iter()
+            .filter_map(|w| {
+                w.branch
+                    .as_ref()
+                    .filter(|b| {
+                        b.starts_with("refs/heads/rit/workspaces/") && !branches.contains(*b)
+                    })
+                    .map(|_| w.path.clone())
+            })
+            .collect();
+        Ok(WorkspaceReconciliation {
+            workspaces: observations,
+            orphan_branches,
+            unclaimed_worktrees,
+        })
+    }
+    /// Lock or unlock an identified RIT branch's actual worktree; metadata is not authentication.
+    pub fn workspace_lock(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        reason: Option<&str>,
+    ) -> Result<(), GitError> {
+        let state = self.workspace_reconcile(repo)?;
+        let w = state
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id)
+            .ok_or(GitError::Parse("workspace not found"))?;
+        if w.observation != "present" && w.observation != "no_checkout" {
+            return Err(GitError::Unavailable(
+                "workspace must reconcile to its manifest path",
+            ));
+        }
+        let mut args: Vec<OsString> = ["-c", "core.hooksPath=/dev/null", "worktree"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        if let Some(reason) = reason {
+            if reason.is_empty() || reason.len() > 256 || reason.chars().any(|c| c.is_control()) {
+                return Err(GitError::Parse("invalid lock reason"));
+            }
+            args.extend(["lock".into(), "--reason".into(), reason.into()]);
+        } else {
+            args.push("unlock".into());
+        }
+        args.push(w.manifest.path.into());
+        self.run(Some(repo), &args, "workspace lock")?;
+        Ok(())
+    }
     /// Create one commit-only Git checkpoint ref with an expected nonexistent old value.
     /// This does not capture or alter the index, working tree, untracked files or submodule contents.
     pub fn checkpoint_commit(
@@ -1045,5 +1523,119 @@ fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
 fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
     Err(GitError::Unavailable(
         "restricted Git status/diff is not validated on this platform",
+    ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn workspace_target(dest: &Path) -> Result<PathBuf, GitError> {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Component;
+    if dest.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(GitError::Parse("parent traversal not allowed"));
+    }
+    let absolute = if dest.is_absolute() {
+        dest.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(GitError::Launch)?
+            .join(dest)
+    };
+    let leaf = absolute
+        .file_name()
+        .ok_or(GitError::Parse("workspace path must have a name"))?;
+    if leaf == ".git" {
+        return Err(GitError::Parse("invalid workspace path"));
+    }
+    let parent = absolute
+        .parent()
+        .ok_or(GitError::Parse("workspace parent"))?;
+    let uid = rustix::process::geteuid().as_raw();
+    let mut current = PathBuf::from("/");
+    for component in parent.components() {
+        if let Component::Normal(n) = component {
+            current.push(n);
+            let st = std::fs::symlink_metadata(&current).map_err(|source| GitError::Path {
+                path: current.clone(),
+                source,
+            })?;
+            if !st.is_dir()
+                || st.file_type().is_symlink()
+                || (st.uid() != 0 && st.uid() != uid)
+                || (st.mode() & 0o022 != 0 && st.mode() & 0o1000 == 0)
+            {
+                return Err(GitError::Unavailable(
+                    "workspace ancestry must be trusted and non-symlinked",
+                ));
+            }
+        }
+    }
+    let st = std::fs::metadata(parent).map_err(GitError::Launch)?;
+    if st.uid() != uid || st.mode() & 0o077 != 0 {
+        return Err(GitError::Unavailable("workspace parent must be owner-only"));
+    }
+    let target = parent.canonicalize().map_err(GitError::Launch)?.join(leaf);
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return Err(GitError::Unavailable("workspace path already exists"));
+    }
+    Ok(target)
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn workspace_target(_: &Path) -> Result<PathBuf, GitError> {
+    Err(GitError::Unavailable(
+        "workspace paths not supported on this platform",
+    ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn materialize_files(
+    root: &Path,
+    files: Vec<(String, String, bool, Vec<u8>)>,
+) -> Result<(), GitError> {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    use std::{io::Write, os::unix::fs::PermissionsExt, path::Component};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    for (path, _, executable, data) in files {
+        let mut dir = open(root, flags, Mode::empty()).map_err(|e| GitError::Launch(e.into()))?;
+        let mut components = Path::new(&path).components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(name) = component else {
+                return Err(GitError::Parse("invalid tree path"));
+            };
+            if components.peek().is_none() {
+                let fd = openat(
+                    &dir,
+                    name,
+                    OFlags::WRONLY
+                        | OFlags::CREATE
+                        | OFlags::EXCL
+                        | OFlags::NOFOLLOW
+                        | OFlags::CLOEXEC,
+                    Mode::from_raw_mode(if executable { 0o755 } else { 0o644 }),
+                )
+                .map_err(|e| GitError::Launch(e.into()))?;
+                let mut file = std::fs::File::from(fd);
+                file.write_all(&data).map_err(GitError::Launch)?;
+                file.set_permissions(std::fs::Permissions::from_mode(if executable {
+                    0o755
+                } else {
+                    0o644
+                }))
+                .map_err(GitError::Launch)?;
+            } else {
+                match mkdirat(&dir, name, Mode::from_raw_mode(0o700)) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => (),
+                    Err(e) => return Err(GitError::Launch(e.into())),
+                }
+                dir = openat(&dir, name, flags, Mode::empty())
+                    .map_err(|e| GitError::Launch(e.into()))?;
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn materialize_files(_: &Path, _: Vec<(String, String, bool, Vec<u8>)>) -> Result<(), GitError> {
+    Err(GitError::Unavailable(
+        "workspace materialization unsupported on this platform",
     ))
 }

@@ -294,3 +294,40 @@ impl GitCheckpointService {
 }
 /// Ephemeral activity observations from real Git worktrees.
 pub mod activity;
+
+/// Git-ref-backed cooperative workspace service, not authenticated storage or a sandbox.
+pub struct WorkspaceService {
+    git: Git,
+}
+impl WorkspaceService {
+    /// Construct an independent Git workspace service.
+    pub fn new(git: Git) -> Self {
+        Self { git }
+    }
+    /// Create a real linked Git worktree and durable coordination manifest.
+    pub fn create(
+        &self,
+        repo: &Path,
+        path: &Path,
+        name: &str,
+        base: &str,
+    ) -> Result<rit_core::workspace::WorkspaceManifest, ApplicationError> {
+        Ok(self.git.workspace_create(repo, path, name, base)?)
+    }
+    /// Reconcile manifest, branch and worktree claims against Git inventory.
+    pub fn reconcile(
+        &self,
+        repo: &Path,
+    ) -> Result<rit_core::workspace::WorkspaceReconciliation, ApplicationError> {
+        Ok(self.git.workspace_reconcile(repo)?)
+    }
+    /// Lock or unlock the matched Git worktree.
+    pub fn lock(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        reason: Option<&str>,
+    ) -> Result<(), ApplicationError> {
+        Ok(self.git.workspace_lock(repo, id, reason)?)
+    }
+}

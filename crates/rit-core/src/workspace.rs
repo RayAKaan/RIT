@@ -117,3 +117,51 @@ mod tests {
         assert!(w.transition(WorkspaceState::Ready).is_err());
     }
 }
+
+/// Git-backed coordination metadata; never an authentication or authorization record.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceManifest {
+    /// Manifest schema.
+    pub schema_version: u32,
+    /// Opaque ID; also encoded in the branch and manifest ref names.
+    pub id: WorkspaceId,
+    /// Informational name, not a principal identity.
+    pub name: String,
+    /// Canonical requested worktree path.
+    pub path: String,
+    /// RIT-owned branch ref; ordinary `git push --all` may push it.
+    pub branch: String,
+    /// Base commit and object format.
+    pub base: crate::git_object::ObjectId,
+    /// Unix seconds at request time, not a trusted timestamp.
+    pub created_at: u64,
+    /// `provisioning`, `ready`, or `no_checkout`.
+    pub state: String,
+    /// Explicit materialization limitation, when any.
+    pub limitation: Option<String>,
+}
+/// Reconciliation of untrusted manifest claims against live Git inventory.
+#[derive(Clone, Debug, Serialize)]
+pub struct ManagedWorkspaceObservation {
+    /// Manifest content, not authenticated.
+    pub manifest: WorkspaceManifest,
+    /// Manifest object used for compare-and-swap.
+    pub manifest_oid: crate::git_object::ObjectId,
+    /// Actual Git inventory entry with matching branch, if any.
+    pub worktree: Option<crate::git_object::WorktreeRecord>,
+    /// Reconciliation classification.
+    pub observation: String,
+    /// Live Git status if safely available.
+    pub status: Option<crate::repository::Status>,
+}
+/// Bounded workspace reconciliation result.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkspaceReconciliation {
+    /// Valid manifest observations.
+    pub workspaces: Vec<ManagedWorkspaceObservation>,
+    /// RIT branches with no matching manifest; never deleted automatically.
+    pub orphan_branches: Vec<String>,
+    /// RIT branches checked out without a valid manifest.
+    pub unclaimed_worktrees: Vec<String>,
+}
