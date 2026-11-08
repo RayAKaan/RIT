@@ -2393,6 +2393,133 @@ impl Git {
         self.checkpoint_verify_index(repo, &c.manifest)?;
         Ok(c)
     }
+    /// Examine captured small Git LFS pointers and gitlinks without invoking filters or fetching content.
+    /// Local LFS observations are ephemeral; the checkpoint does not retain LFS payloads.
+    pub fn checkpoint_supplementary_evidence(
+        &self,
+        repo: &Path,
+        c: &rit_core::checkpoint::ContentCheckpointRecord,
+    ) -> Result<rit_core::checkpoint::CheckpointSupplementaryEvidence, GitError> {
+        use rit_core::checkpoint::{
+            CheckpointSupplementaryEvidence, GitlinkEvidence, LfsPointerEvidence,
+        };
+        let mut blobs = std::collections::BTreeMap::<String, Vec<(String, String)>>::new();
+        let mut gitlinks = Vec::new();
+        for e in &c.manifest.staged {
+            if e.mode == "160000" {
+                gitlinks.push(GitlinkEvidence {
+                    path: e.path.clone(),
+                    stage: e.stage,
+                    commit: e.object.clone(),
+                    availability: "not_checked; nested content and dirty state not captured",
+                });
+            } else {
+                blobs
+                    .entry(e.object.as_hex().into())
+                    .or_default()
+                    .push((e.path.clone(), format!("index_stage_{}", e.stage)));
+            }
+        }
+        for e in &c.manifest.worktree {
+            if e.kind == "regular"
+                && let Some(blob) = &e.blob
+            {
+                blobs
+                    .entry(blob.as_hex().into())
+                    .or_default()
+                    .push((e.path.clone(), "worktree".into()));
+            }
+        }
+        let mut pointers = Vec::new();
+        if !blobs.is_empty() {
+            let input = blobs.keys().map(|k| format!("{k}\n")).collect::<String>();
+            let args = [
+                "cat-file",
+                "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            let (out, _) = self.run_internal(
+                Some(repo),
+                &args,
+                "workspace checkpoint lfs blob sizes",
+                &[],
+                false,
+                Some(input.as_bytes()),
+            )?;
+            let text = std::str::from_utf8(&out).map_err(|_| GitError::NonUnicode)?;
+            if text.lines().count() != blobs.len() {
+                return Err(GitError::Parse("checkpoint LFS batch count"));
+            }
+            let config_args = ["config", "--get", "lfs.storage"]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>();
+            let (_, config_code) = self.run_internal(
+                Some(repo),
+                &config_args,
+                "workspace checkpoint lfs config",
+                &[],
+                true,
+                None,
+            )?;
+            let common = self.inspect(repo)?.common_git_dir;
+            for line in text.lines() {
+                let f = line.split(' ').collect::<Vec<_>>();
+                if f.len() != 3 || f[1] != "blob" {
+                    return Err(GitError::Parse("checkpoint LFS blob size"));
+                }
+                let size = f[2]
+                    .parse::<usize>()
+                    .map_err(|_| GitError::Parse("checkpoint LFS blob size"))?;
+                if size > 2048 {
+                    continue;
+                }
+                let oid = rit_core::git_object::ObjectId::new(c.object.algorithm(), f[0])
+                    .map_err(GitError::Parse)?;
+                let content = self.conflict_blob(repo, &oid)?;
+                if !content.starts_with(b"version https://git-lfs.github.com/spec/v1\n") {
+                    continue;
+                }
+                let parsed = parse_lfs_pointer(&content);
+                for (path, source) in blobs
+                    .get(f[0])
+                    .ok_or(GitError::Parse("LFS object identity"))?
+                {
+                    let (hash, declared, status) = match &parsed {
+                        Some((hash, size)) => (
+                            Some(hash.clone()),
+                            Some(*size),
+                            if config_code == 0 {
+                                "custom_storage_not_checked".into()
+                            } else {
+                                check_default_lfs_payload(Path::new(&common), hash, *size)
+                            },
+                        ),
+                        None => (None, None, "malformed_pointer".into()),
+                    };
+                    pointers.push(LfsPointerEvidence {
+                        path: path.clone(),
+                        source: source.clone(),
+                        sha256: hash,
+                        size: declared,
+                        local_status: status,
+                    });
+                }
+            }
+        }
+        Ok(CheckpointSupplementaryEvidence {
+            lfs_pointers: pointers,
+            gitlinks,
+            limitations: vec![
+                "Only captured regular/staged blobs up to 2048 bytes are examined for canonical pointers",
+                "LFS payloads are not included in checkpoints and can disappear immediately",
+                "Custom LFS storage, network access and nested submodule content are not inspected",
+                "Local LFS hash verification is limited to 64 MiB; no provenance or atomicity is established",
+            ],
+        })
+    }
     fn checkpoint_verify_index(
         &self,
         repo: &Path,
@@ -4175,4 +4302,113 @@ fn restore_create_index(gitdir: &Path, bytes: &[u8]) -> Result<(), GitError> {
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 fn restore_create_index(_: &Path, _: &[u8]) -> Result<(), GitError> {
     Err(GitError::Unavailable("restore unsupported"))
+}
+
+fn parse_lfs_pointer(bytes: &[u8]) -> Option<(String, u64)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut lines = text.lines();
+    if lines.next()? != "version https://git-lfs.github.com/spec/v1" {
+        return None;
+    }
+    let mut oid = None;
+    let mut size = None;
+    for line in lines {
+        if let Some(s) = line.strip_prefix("oid sha256:") {
+            if oid.is_some()
+                || s.len() != 64
+                || !s
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return None;
+            }
+            oid = Some(s.to_owned());
+        } else if let Some(s) = line.strip_prefix("size ") {
+            if size.is_some() || s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            size = s.parse::<u64>().ok();
+        } else if !line.starts_with("ext-") {
+            return None;
+        }
+    }
+    Some((oid?, size?))
+}
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn check_default_lfs_payload(common: &Path, hash: &str, expected: u64) -> String {
+    use rustix::fs::{Mode, OFlags, fstat, open, openat};
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    if expected > 64 * 1024 * 1024 {
+        return "not_checked_size_limit".into();
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let Ok(mut dir) = open(common, flags, Mode::empty()) else {
+        return "unavailable_or_unsafe_path".into();
+    };
+    for component in ["lfs", "objects", &hash[..2], &hash[2..4]] {
+        dir = match openat(&dir, component, flags, Mode::empty()) {
+            Ok(v) => v,
+            Err(rustix::io::Errno::NOENT) => return "missing".into(),
+            Err(_) => return "unavailable_or_unsafe_path".into(),
+        };
+    }
+    let fd = match openat(
+        &dir,
+        hash,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(v) => v,
+        Err(rustix::io::Errno::NOENT) => return "missing".into(),
+        Err(_) => return "unavailable_or_unsafe_path".into(),
+    };
+    let Ok(before) = fstat(&fd) else {
+        return "unavailable".into();
+    };
+    if before.st_mode & 0o170000 != 0o100000 || before.st_size < 0 {
+        return "unsupported_file_type".into();
+    }
+    if before.st_size as u64 != expected {
+        return "size_mismatch".into();
+    }
+    let mut file = std::fs::File::from(fd);
+    let mut digest = Sha256::new();
+    let mut total = 0u64;
+    let mut buf = [0u8; 65536];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n as u64;
+                if total > expected {
+                    return "changed_during_read".into();
+                }
+                digest.update(&buf[..n]);
+            }
+            Err(_) => return "unavailable".into(),
+        }
+    }
+    let Ok(after) = fstat(&file) else {
+        return "unavailable".into();
+    };
+    if total != expected
+        || before.st_size != after.st_size
+        || before.st_mtime != after.st_mtime
+        || before.st_mtime_nsec != after.st_mtime_nsec
+        || before.st_ctime != after.st_ctime
+        || before.st_ctime_nsec != after.st_ctime_nsec
+    {
+        return "changed_during_read".into();
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if actual == hash {
+        "available_and_sha256_verified".into()
+    } else {
+        "sha256_mismatch".into()
+    }
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn check_default_lfs_payload(_: &Path, _: &str, _: u64) -> String {
+    "platform_not_checked".into()
 }

@@ -272,3 +272,40 @@ pub struct RestoreObservation {
     /// Completed inventory is not a guarantee that files have not subsequently changed.
     pub observation: String,
 }
+
+/// LFS pointer found in captured staged/worktree bytes, not the payload itself.
+#[derive(Clone, Debug, Serialize)]
+pub struct LfsPointerEvidence {
+    /// Captured workspace-relative path.
+    pub path: String,
+    /// Staged index stage or worktree observation.
+    pub source: String,
+    /// SHA-256 pointer OID when valid.
+    pub sha256: Option<String>,
+    /// Declared payload size when valid.
+    pub size: Option<u64>,
+    /// Local payload observation; the payload is not retained by the checkpoint.
+    pub local_status: String,
+}
+/// Gitlink object ID is not a nested checkpoint.
+#[derive(Clone, Debug, Serialize)]
+pub struct GitlinkEvidence {
+    /// Workspace-relative submodule path.
+    pub path: String,
+    /// Index stage.
+    pub stage: u8,
+    /// Captured gitlink ID.
+    pub commit: crate::git_object::ObjectId,
+    /// Nested Git repository and content availability are not checked.
+    pub availability: &'static str,
+}
+/// Supplemental current availability evidence, not capture completeness or provenance.
+#[derive(Clone, Debug, Serialize)]
+pub struct CheckpointSupplementaryEvidence {
+    /// Recognized pointers among captured blob candidates up to 2048 bytes.
+    pub lfs_pointers: Vec<LfsPointerEvidence>,
+    /// Gitlinks without nested-content guarantees.
+    pub gitlinks: Vec<GitlinkEvidence>,
+    /// Limits and absence of nested-content preservation.
+    pub limitations: Vec<&'static str>,
+}

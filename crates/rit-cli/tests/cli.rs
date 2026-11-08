@@ -2809,3 +2809,112 @@ fn restore_never_overwrites_an_existing_index_lock() {
         "capture\n"
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn checkpoint_reports_lfs_pointer_payload_presence_and_hash_without_filters() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    // SHA-256 of the literal payload "abc". No git-lfs executable or filter runs.
+    let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    std::fs::write(
+        repo.join("asset.bin"),
+        format!("version https://git-lfs.github.com/spec/v1\noid sha256:{hash}\nsize 3\n"),
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let store = repo.join(".git/lfs/objects/ba/78");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join(hash), b"abc").unwrap();
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "lfs",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let id = c["checkpoint"]["manifest"]["id"].as_str().unwrap();
+    let verify = || cli(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    let output = verify();
+    let ptrs = output["supplementary_evidence"]["lfs_pointers"]
+        .as_array()
+        .unwrap();
+    assert_eq!(ptrs.len(), 2);
+    assert!(
+        ptrs.iter()
+            .all(|p| p["sha256"] == hash && p["local_status"] == "available_and_sha256_verified")
+    );
+    std::fs::write(store.join(hash), b"bad").unwrap();
+    assert!(
+        verify()["supplementary_evidence"]["lfs_pointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["local_status"] == "sha256_mismatch")
+    );
+    std::fs::remove_file(store.join(hash)).unwrap();
+    assert!(
+        verify()["supplementary_evidence"]["lfs_pointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["local_status"] == "missing")
+    );
+    let outside = d.path().join("outside-payload");
+    std::fs::write(&outside, b"abc").unwrap();
+    std::os::unix::fs::symlink(&outside, store.join(hash)).unwrap();
+    assert!(
+        verify()["supplementary_evidence"]["lfs_pointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["local_status"] == "unavailable_or_unsafe_path")
+    );
+    assert_eq!(std::fs::read(&outside).unwrap(), b"abc");
+    git(&["config", "lfs.storage", "/untrusted/custom/path"]);
+    assert!(
+        verify()["supplementary_evidence"]["lfs_pointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["local_status"] == "custom_storage_not_checked")
+    );
+}

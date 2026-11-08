@@ -659,7 +659,10 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 let item = service
                     .verify_content(&repo, id)
                     .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-                output::value(&serde_json::json!({"schema_version":1,"checkpoint":item,"git_fsck":"passed","manifest_tree_consistency":"passed","index_stage_consistency":"passed","submodule_content":"not_verified","lfs_payload":"not_verified","authenticity":"not_verified","atomic_completeness":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+                let evidence = service
+                    .supplementary_evidence(&repo, &item)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                output::value(&serde_json::json!({"schema_version":1,"checkpoint":item,"git_fsck":"passed","manifest_tree_consistency":"passed","index_stage_consistency":"passed","supplementary_evidence":evidence,"authenticity":"not_verified","atomic_completeness":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
             } else {
                 let item = service
                     .verify(&repo, id)

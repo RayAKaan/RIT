@@ -343,6 +343,14 @@ impl GitCheckpointService {
     ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, ApplicationError> {
         Ok(self.git.content_checkpoint_verify(repo, id)?)
     }
+    /// Inspect captured LFS pointers and gitlinks without fetching or executing filters.
+    pub fn supplementary_evidence(
+        &self,
+        repo: &Path,
+        c: &rit_core::checkpoint::ContentCheckpointRecord,
+    ) -> Result<rit_core::checkpoint::CheckpointSupplementaryEvidence, ApplicationError> {
+        Ok(self.git.checkpoint_supplementary_evidence(repo, c)?)
+    }
     /// Preview recovery of captured content into a new detached worktree.
     pub fn restore_plan(
         &self,
