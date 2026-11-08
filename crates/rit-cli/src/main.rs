@@ -694,6 +694,9 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     workspace,
                     include_untracked,
                     include_ignored,
+                    max_paths,
+                    max_file_bytes,
+                    max_total_bytes,
                     json,
                 },
         } => {
@@ -720,7 +723,17 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     .parse()
                     .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
                 let item = service
-                    .create_content(&repo, id, include_untracked, &include_ignored)
+                    .create_content_with_limits(
+                        &repo,
+                        id,
+                        include_untracked,
+                        &include_ignored,
+                        &rit_core::checkpoint::CaptureLimits {
+                            max_paths,
+                            max_file_bytes,
+                            max_total_bytes,
+                        },
+                    )
                     .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
                 output::value(
                     &serde_json::json!({"schema_version":1,"checkpoint":item}),

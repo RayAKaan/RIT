@@ -467,6 +467,15 @@ pub enum CheckpointCommand {
         /// Explicitly capture an ignored file by exact relative path (repeatable).
         #[arg(long)]
         include_ignored: Vec<String>,
+        /// Maximum selected paths (1..=2000, default 500).
+        #[arg(long, default_value_t = 500)]
+        max_paths: usize,
+        /// Maximum bytes per file (1..=4194304, default 1048576).
+        #[arg(long, default_value_t = 1_048_576)]
+        max_file_bytes: usize,
+        /// Maximum total raw bytes (1..=33554432, default 8388608).
+        #[arg(long, default_value_t = 8_388_608)]
+        max_total_bytes: usize,
         #[arg(long)]
         json: bool,
     },

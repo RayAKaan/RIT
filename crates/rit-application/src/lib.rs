@@ -328,6 +328,23 @@ impl GitCheckpointService {
             .git
             .content_checkpoint_create(repo, id, include_untracked, ignored)?)
     }
+    /// Capture with caller-selected budgets, bounded by provider ceilings.
+    pub fn create_content_with_limits(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        include_untracked: bool,
+        ignored: &[String],
+        limits: &rit_core::checkpoint::CaptureLimits,
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, ApplicationError> {
+        Ok(self.git.content_checkpoint_create_with_limits(
+            repo,
+            id,
+            include_untracked,
+            ignored,
+            limits,
+        )?)
+    }
     /// List unauthenticated content checkpoints.
     pub fn list_content(
         &self,

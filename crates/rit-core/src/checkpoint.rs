@@ -154,6 +154,41 @@ pub struct CapturedWorktreeEntry {
 fn unknown_consistency() -> String {
     "not_recorded".into()
 }
+/// Explicit capture budgets. Hard provider ceilings remain in force.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureLimits {
+    /// Maximum selected worktree paths, up to 2,000.
+    pub max_paths: usize,
+    /// Maximum raw bytes in one file, up to 4 MiB.
+    pub max_file_bytes: usize,
+    /// Maximum total raw worktree bytes, up to 32 MiB.
+    pub max_total_bytes: usize,
+}
+impl Default for CaptureLimits {
+    fn default() -> Self {
+        Self {
+            max_paths: 500,
+            max_file_bytes: 1_048_576,
+            max_total_bytes: 8_388_608,
+        }
+    }
+}
+impl CaptureLimits {
+    /// Validate against bounded provider ceilings.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=2000).contains(&self.max_paths)
+            || !(1..=4_194_304).contains(&self.max_file_bytes)
+            || !(1..=33_554_432).contains(&self.max_total_bytes)
+            || self.max_file_bytes > self.max_total_bytes
+        {
+            return Err(
+                "checkpoint budgets must be positive, within provider ceilings, and file budget must not exceed total budget",
+            );
+        }
+        Ok(())
+    }
+}
 /// Unauthenticated Git-object coordination data, not a restore authorization.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -172,6 +207,15 @@ pub struct ContentCheckpoint {
     pub staged: Vec<CapturedIndexEntry>,
     /// Exact raw worktree content for observed paths.
     pub worktree: Vec<CapturedWorktreeEntry>,
+    /// Optional capture budgets, present on schema 3 records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_limits: Option<CaptureLimits>,
+    /// Untrusted Unix creation time; absent from earlier schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    /// Whether nonignored untracked files were selected; absent from earlier schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_untracked: Option<bool>,
     /// Observation consistency, not an atomic snapshot or authenticated claim.
     #[serde(default = "unknown_consistency")]
     pub consistency: String,

@@ -3136,3 +3136,138 @@ fn concurrent_workspace_path_claim_preserves_unique_winner_and_operation_evidenc
     assert!(!v["operations"].as_array().unwrap().is_empty());
     assert!(dest.join(".git").exists());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn checkpoint_custom_budgets_capture_verify_and_restore_large_file_without_overwrite() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("file"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = temp.path().join("work");
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "large",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    let large = vec![b'z'; 2_000_000];
+    std::fs::write(work.join("file"), &large).unwrap();
+    let default = run(
+        &[
+            "checkpoint",
+            "create",
+            "--repo",
+            rp,
+            "--workspace",
+            wid,
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!default.status.success());
+    let invalid = run(
+        &[
+            "checkpoint",
+            "create",
+            "--repo",
+            rp,
+            "--workspace",
+            wid,
+            "--max-file-bytes",
+            "4194305",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!invalid.status.success());
+    let low = run(
+        &[
+            "checkpoint",
+            "create",
+            "--repo",
+            rp,
+            "--workspace",
+            wid,
+            "--max-file-bytes",
+            "2100000",
+            "--max-total-bytes",
+            "1000000",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!low.status.success());
+    let c = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--max-file-bytes",
+        "2100000",
+        "--max-total-bytes",
+        "3000000",
+        "--max-paths",
+        "10",
+        "--json",
+    ]);
+    let m = &c["checkpoint"]["manifest"];
+    assert_eq!(m["schema_version"], 3);
+    assert_eq!(m["capture_limits"]["max_file_bytes"], 2_100_000);
+    assert!(m["created_at"].as_u64().unwrap() > 0);
+    assert_eq!(m["include_untracked"], false);
+    let id = m["id"].as_str().unwrap();
+    let v = cli(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    assert_eq!(v["index_stage_consistency"], "passed");
+    std::fs::write(work.join("file"), "newer original\n").unwrap();
+    let dest = temp.path().join("restored");
+    let r = cli(&[
+        "checkpoint",
+        "restore",
+        id,
+        "--repo",
+        rp,
+        "--to",
+        dest.to_str().unwrap(),
+        "--yes",
+        "--accept-incomplete",
+        "--json",
+    ]);
+    assert_eq!(r["restore"]["operation"]["state"], "completed");
+    assert_eq!(std::fs::read(dest.join("file")).unwrap(), large);
+    assert_eq!(
+        std::fs::read_to_string(work.join("file")).unwrap(),
+        "newer original\n"
+    );
+}

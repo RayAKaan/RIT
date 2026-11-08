@@ -1105,6 +1105,14 @@ impl Git {
         repo: &Path,
         id: &rit_core::git_object::ObjectId,
     ) -> Result<Vec<u8>, GitError> {
+        self.bounded_blob(repo, id, 1_048_576)
+    }
+    fn bounded_blob(
+        &self,
+        repo: &Path,
+        id: &rit_core::git_object::ObjectId,
+        limit: usize,
+    ) -> Result<Vec<u8>, GitError> {
         let format = self.object_format(repo)?;
         if id.algorithm() != format {
             return Err(GitError::Parse("blob object format"));
@@ -1116,10 +1124,8 @@ impl Git {
             .query(repo, &["cat-file", "-s", id.as_hex()], "blob size")?
             .parse::<usize>()
             .map_err(|_| GitError::Parse("blob size"))?;
-        if size > 1_048_576 {
-            return Err(GitError::Unavailable(
-                "blob exceeds structural analysis limit",
-            ));
+        if size > limit {
+            return Err(GitError::Unavailable("blob exceeds configured read limit"));
         }
         let b = self.run(
             Some(repo),
@@ -1914,14 +1920,30 @@ impl Git {
         )
         .map_err(GitError::Parse)
     }
-    /// Capture a bounded raw-content checkpoint of a reconciled managed workspace.
-    /// No restore is provided; concurrent edits, ignored paths and submodules limit completeness.
+    /// Capture with conservative default resource budgets.
     pub fn content_checkpoint_create(
         &self,
         repo: &Path,
         id: rit_core::workspace::WorkspaceId,
         include_untracked: bool,
         ignored: &[String],
+    ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, GitError> {
+        self.content_checkpoint_create_with_limits(
+            repo,
+            id,
+            include_untracked,
+            ignored,
+            &rit_core::checkpoint::CaptureLimits::default(),
+        )
+    }
+    /// Capture bounded raw content with explicitly selected resource budgets; not atomic.
+    pub fn content_checkpoint_create_with_limits(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+        include_untracked: bool,
+        ignored: &[String],
+        limits: &rit_core::checkpoint::CaptureLimits,
     ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, GitError> {
         use rit_core::{
             checkpoint::{
@@ -1931,6 +1953,7 @@ impl Git {
             git_object::ObjectId,
         };
         use sha2::{Digest, Sha256};
+        limits.validate().map_err(GitError::Parse)?;
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Err(GitError::Unavailable(
                 "content checkpoints unavailable on this platform",
@@ -2068,8 +2091,10 @@ impl Git {
             }
             selected.insert(path.clone(), "selected_ignored".into());
         }
-        if selected.len() > 500 {
-            return Err(GitError::Unavailable("checkpoint file count exceeds 500"));
+        if selected.len() > limits.max_paths {
+            return Err(GitError::Unavailable(
+                "checkpoint file count exceeds selected budget",
+            ));
         }
         let mut total = 0usize;
         let mut worktree = Vec::new();
@@ -2079,7 +2104,7 @@ impl Git {
             if staged.iter().any(|e| e.path == path && e.mode == "160000") {
                 continue;
             }
-            match read_checkpoint_entry(root, &path)? {
+            match read_checkpoint_entry(root, &path, limits.max_file_bytes)? {
                 None => {
                     if category != "tracked" {
                         return Err(GitError::Unavailable("selected file disappeared"));
@@ -2097,8 +2122,10 @@ impl Git {
                     total = total
                         .checked_add(bytes.len())
                         .ok_or(GitError::OutputLimit)?;
-                    if total > 8_388_608 {
-                        return Err(GitError::Unavailable("checkpoint total exceeds 8 MiB"));
+                    if total > limits.max_total_bytes {
+                        return Err(GitError::Unavailable(
+                            "checkpoint total exceeds selected budget",
+                        ));
                     }
                     let digest: [u8; 32] = Sha256::digest(&bytes).into();
                     observed.insert(path.clone(), Some((kind.into(), executable, digest)));
@@ -2116,7 +2143,7 @@ impl Git {
         // Re-read every selected path after capture; this detects many cross-file races,
         // but cannot prove atomicity or detect a change that is reversed between reads.
         for (path, expected) in &observed {
-            let now = read_checkpoint_entry(root, path)
+            let now = read_checkpoint_entry(root, path, limits.max_file_bytes)
                 .map_err(|_| GitError::CheckpointChanged { path: path.clone() })?
                 .map(|(kind, exec, bytes)| {
                     let digest: [u8; 32] = Sha256::digest(&bytes).into();
@@ -2169,7 +2196,7 @@ impl Git {
                 .push("Split-index shared-index file is not captured as raw index bytes".into())
         }
         let id = CheckpointId::new();
-        let manifest=ContentCheckpoint{schema_version:2,id,workspace:w.manifest.id,base:base.clone(),index_blob:index_blob.clone(),staged,worktree,consistency:"observed_quiescence_on_recheck".into(),limitations,complete:false,scope:"bounded raw worktree and index observation; non-atomic; no authenticated provenance; recovery only to a new worktree".into()};
+        let manifest=ContentCheckpoint{schema_version:3,id,workspace:w.manifest.id,base:base.clone(),index_blob:index_blob.clone(),staged,worktree,capture_limits:Some(limits.clone()),created_at:Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|GitError::Parse("system clock before Unix epoch"))?.as_secs()),include_untracked:Some(include_untracked),consistency:"observed_quiescence_on_recheck".into(),limitations,complete:false,scope:"bounded raw worktree and index observation; non-atomic; no authenticated provenance; recovery only to a new worktree".into()};
         let staged_entries = manifest
             .staged
             .iter()
@@ -2187,6 +2214,11 @@ impl Git {
         let worktree_tree = self.checkpoint_tree(root, format, &worktree_entries)?;
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|_| GitError::Parse("checkpoint manifest serialization"))?;
+        if manifest_json.len() > 1_048_576 {
+            return Err(GitError::Unavailable(
+                "checkpoint manifest exceeds reader limit",
+            ));
+        }
         let manifest_oid = self.checkpoint_hash_blob(root, format, &manifest_json)?;
         let tree = self.checkpoint_tree(
             root,
@@ -2293,8 +2325,15 @@ impl Git {
             }
             let m: ContentCheckpoint =
                 serde_json::from_slice(&raw).map_err(|_| GitError::Parse("checkpoint manifest"))?;
-            if !matches!(m.schema_version, 1 | 2)
-                || (m.schema_version == 2 && m.consistency != "observed_quiescence_on_recheck")
+            if !matches!(m.schema_version, 1..=3)
+                || (m.schema_version >= 2 && m.consistency != "observed_quiescence_on_recheck")
+                || (m.schema_version == 3
+                    && (m
+                        .capture_limits
+                        .as_ref()
+                        .is_none_or(|v| v.validate().is_err())
+                        || m.created_at.is_none()
+                        || m.include_untracked.is_none()))
                 || m.complete
                 || fields[0] != format!("refs/rit/content-checkpoints/{}", m.id)
                 || m.base.algorithm() != format
@@ -2707,6 +2746,8 @@ impl Git {
         let mut deleted_paths = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         let mut total = 0usize;
+        let limits = c.manifest.capture_limits.clone().unwrap_or_default();
+        limits.validate().map_err(GitError::Parse)?;
         for e in &c.manifest.worktree {
             validate_checkpoint_path(&e.path)?;
             if !seen.insert(e.path.clone()) {
@@ -2726,14 +2767,14 @@ impl Git {
                 .blob
                 .as_ref()
                 .ok_or(GitError::Parse("missing restore blob"))?;
-            let bytes = self.conflict_blob(repo, blob)?;
+            let bytes = self.bounded_blob(repo, blob, limits.max_file_bytes)?;
             if e.kind == "symlink" && (bytes.is_empty() || bytes.contains(&0)) {
                 return Err(GitError::Parse("invalid symlink target"));
             }
             total = total
                 .checked_add(bytes.len())
                 .ok_or(GitError::OutputLimit)?;
-            if total > 8_388_608 || files.len() >= 500 {
+            if total > limits.max_total_bytes || files.len() >= limits.max_paths {
                 return Err(GitError::Unavailable(
                     "restore exceeds bounded snapshot limits",
                 ));
@@ -2889,14 +2930,32 @@ impl Git {
                 return Err(GitError::Parse("restored index verification failed"));
             }
             for (path, kind, executable, bytes) in &files {
-                let actual = read_checkpoint_entry(target, path)?
-                    .ok_or(GitError::Parse("restored path disappeared"))?;
+                let actual = read_checkpoint_entry(
+                    target,
+                    path,
+                    plan.checkpoint
+                        .manifest
+                        .capture_limits
+                        .as_ref()
+                        .map_or(1_048_576, |l| l.max_file_bytes),
+                )?
+                .ok_or(GitError::Parse("restored path disappeared"))?;
                 if actual.0 != kind || actual.1 != *executable || actual.2 != *bytes {
                     return Err(GitError::Parse("restored path verification failed"));
                 }
             }
             for path in &plan.deleted_paths {
-                if read_checkpoint_entry(target, path)?.is_some() {
+                if read_checkpoint_entry(
+                    target,
+                    path,
+                    plan.checkpoint
+                        .manifest
+                        .capture_limits
+                        .as_ref()
+                        .map_or(1_048_576, |l| l.max_file_bytes),
+                )?
+                .is_some()
+                {
                     return Err(GitError::Parse("deleted path unexpectedly exists"));
                 }
             }
@@ -4214,7 +4273,11 @@ fn validate_checkpoint_path(path: &str) -> Result<(), GitError> {
 }
 type CapturedRawEntry = Option<(&'static str, bool, Vec<u8>)>;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn read_checkpoint_entry(root: &Path, path: &str) -> Result<CapturedRawEntry, GitError> {
+fn read_checkpoint_entry(
+    root: &Path,
+    path: &str,
+    limit: usize,
+) -> Result<CapturedRawEntry, GitError> {
     use rustix::fs::{AtFlags, Mode, OFlags, fstat, open, openat, readlinkat, statat};
     use std::io::Read;
     use std::path::Component;
@@ -4250,7 +4313,7 @@ fn read_checkpoint_entry(root: &Path, path: &str) -> Result<CapturedRawEntry, Gi
                 return Err(GitError::Unavailable("symlink changed during checkpoint"));
             }
             let bytes = target.into_bytes();
-            if bytes.len() > 1_048_576 {
+            if bytes.len() > limit {
                 return Err(GitError::OutputLimit);
             }
             return Ok(Some(("symlink", false, bytes)));
@@ -4268,20 +4331,23 @@ fn read_checkpoint_entry(root: &Path, path: &str) -> Result<CapturedRawEntry, Gi
         )
         .map_err(|e| GitError::Launch(e.into()))?;
         let before = fstat(&fd).map_err(|e| GitError::Launch(e.into()))?;
-        if before.st_mode & 0o170000 != 0o100000 || before.st_size < 0 || before.st_size > 1_048_576
+        if before.st_mode & 0o170000 != 0o100000
+            || before.st_size < 0
+            || before.st_size as u64 > limit as u64
         {
             return Err(GitError::Unavailable(
-                "checkpoint file unsupported or exceeds 1 MiB",
+                "checkpoint file unsupported or exceeds selected file budget",
             ));
         }
         let file = std::fs::File::from(fd);
         let mut bytes = Vec::new();
         (&file)
-            .take(1_048_577)
+            .take((limit as u64) + 1)
             .read_to_end(&mut bytes)
             .map_err(GitError::Launch)?;
         let after = fstat(&file).map_err(|e| GitError::Launch(e.into()))?;
-        if before.st_size != after.st_size
+        if bytes.len() > limit
+            || before.st_size != after.st_size
             || before.st_mtime != after.st_mtime
             || before.st_mtime_nsec != after.st_mtime_nsec
             || before.st_ctime != after.st_ctime
@@ -4294,7 +4360,7 @@ fn read_checkpoint_entry(root: &Path, path: &str) -> Result<CapturedRawEntry, Gi
     Err(GitError::Parse("checkpoint path"))
 }
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn read_checkpoint_entry(_: &Path, _: &str) -> Result<CapturedRawEntry, GitError> {
+fn read_checkpoint_entry(_: &Path, _: &str, _: usize) -> Result<CapturedRawEntry, GitError> {
     Err(GitError::Unavailable(
         "content checkpoint unsupported on this platform",
     ))
