@@ -165,3 +165,68 @@ fn security_scaffolding_fails_closed_without_touching_storage() {
         assert!(!data.exists());
     }
 }
+
+#[test]
+fn read_only_git_refs_and_log_do_not_open_registry() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let exec = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    exec(&["init", "-q"]);
+    exec(&["commit", "-q", "--allow-empty", "-m", "first"]);
+    exec(&["tag", "v1"]);
+    let data = d.path().join("not-created");
+    for cmd in ["branches", "refs", "log"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args([
+                "--data-dir",
+                data.to_str().unwrap(),
+                "repo",
+                cmd,
+                repo.to_str().unwrap(),
+                "--json",
+            ])
+            .env("XDG_CONFIG_HOME", d.path().join("config"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        let values = if cmd == "log" {
+            &value["commits"]
+        } else {
+            &value["references"]
+        };
+        assert!(!values.as_array().unwrap().is_empty());
+        if cmd == "branches" {
+            assert!(
+                values
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|r| !r["name"].as_str().unwrap().starts_with("refs/tags/"))
+            );
+        }
+        assert!(!data.exists());
+    }
+}

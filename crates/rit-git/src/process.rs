@@ -287,6 +287,117 @@ impl Git {
         }
         Ok(text)
     }
+    /// Read local branches, tags, and remote-tracking refs without opening a RIT registry.
+    pub fn references(
+        &self,
+        input: &Path,
+    ) -> Result<Vec<rit_core::git_object::GitReference>, GitError> {
+        use rit_core::git_object::{GitReference, ObjectId};
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        if !cwd.is_dir() {
+            return Err(GitError::Parse("repository path must be a directory"));
+        }
+        let format = self.object_format(&cwd)?;
+        let text = self.query(
+            &cwd,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)",
+                "refs/heads/",
+                "refs/tags/",
+                "refs/remotes/",
+            ],
+            "references",
+        )?;
+        let mut result = Vec::new();
+        for line in text.lines() {
+            let fields: Vec<_> = line.split('\0').collect();
+            if fields.len() != 4
+                || fields[0].is_empty()
+                || !matches!(fields[2], "commit" | "tree" | "blob" | "tag")
+            {
+                return Err(GitError::Parse("reference fields"));
+            }
+            let object = ObjectId::new(format, fields[1]).map_err(GitError::Parse)?;
+            let peeled = if fields[3].is_empty() {
+                None
+            } else {
+                Some(ObjectId::new(format, fields[3]).map_err(GitError::Parse)?)
+            };
+            result.push(GitReference {
+                name: fields[0].to_owned(),
+                object,
+                object_type: fields[2].to_owned(),
+                peeled,
+            });
+        }
+        Ok(result)
+    }
+    /// Inspect up to `limit` commits reachable from HEAD, without messages or file contents.
+    /// This is a snapshot: shallow repositories and concurrent ref movement affect results.
+    pub fn history(
+        &self,
+        input: &Path,
+        limit: u32,
+    ) -> Result<Vec<rit_core::git_object::GitCommit>, GitError> {
+        use rit_core::git_object::{GitCommit, ObjectId};
+        if !(1..=1000).contains(&limit) {
+            return Err(GitError::Parse("history limit must be between 1 and 1000"));
+        }
+        let ins = self.inspect(input)?;
+        if matches!(ins.head, Head::Unborn { .. }) {
+            return Ok(Vec::new());
+        }
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let format = self.object_format(&cwd)?;
+        let max = format!("--max-count={limit}");
+        let text = self.query(
+            &cwd,
+            &[
+                "log",
+                "--no-show-signature",
+                "--no-notes",
+                "--no-decorate",
+                "--format=%H%x00%P%x00%ct",
+                &max,
+                "HEAD",
+                "--",
+            ],
+            "history",
+        )?;
+        let mut result = Vec::new();
+        for line in text.lines() {
+            let fields: Vec<_> = line.split('\0').collect();
+            if fields.len() != 3 {
+                return Err(GitError::Parse("history fields"));
+            }
+            let id = ObjectId::new(format, fields[0]).map_err(GitError::Parse)?;
+            let parents = fields[1]
+                .split_whitespace()
+                .map(|s| ObjectId::new(format, s).map_err(GitError::Parse))
+                .collect::<Result<Vec<_>, _>>()?;
+            let committed_at = fields[2]
+                .parse()
+                .map_err(|_| GitError::Parse("commit timestamp"))?;
+            result.push(GitCommit {
+                id,
+                parents,
+                committed_at,
+            });
+        }
+        Ok(result)
+    }
+    fn object_format(&self, cwd: &Path) -> Result<rit_core::git_object::ObjectFormat, GitError> {
+        let value = self.query(cwd, &["rev-parse", "--show-object-format"], "object format")?;
+        rit_core::git_object::ObjectFormat::parse(&value)
+            .ok_or(GitError::Parse("unsupported object format"))
+    }
     /// Inspect an existing repository without registering or modifying it.
     pub fn inspect(&self, input: &Path) -> Result<Inspection, GitError> {
         let cwd = input.canonicalize().map_err(|source| GitError::Path {

@@ -57,7 +57,8 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Manage registered repositories.
+    /// Manage registered repositories and inspect Git references.
+    #[command(alias = "repo")]
     Repository {
         #[command(subcommand)]
         command: RepositoryCommand,
@@ -130,6 +131,29 @@ pub enum Command {
 }
 #[derive(Debug, Subcommand)]
 pub enum RepositoryCommand {
+    /// List branches and remote-tracking branches directly from Git; no registry required.
+    Branches {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List local branches, tags and remote-tracking references directly from Git.
+    Refs {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect recent HEAD history without messages or contents; no registry required.
+    Log {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Register an existing Git repository.
     Register {
         #[arg(default_value = ".")]

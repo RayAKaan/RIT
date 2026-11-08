@@ -600,3 +600,55 @@ fn timeout_kills_non_escaped_child_process_group() {
     std::thread::sleep(Duration::from_millis(2300));
     assert!(!marker.exists());
 }
+
+#[test]
+fn read_only_ref_and_history_inspection_real_git() {
+    let d = TempDir::new().unwrap();
+    let root = d.path();
+    run(root, &["init", "-q"]);
+    let git = Git::discover(None).unwrap();
+    assert!(git.references(root).unwrap().is_empty());
+    assert!(git.history(root, 20).unwrap().is_empty());
+    run(root, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    run(root, &["tag", "-a", "v1", "-m", "tag"]);
+    run(root, &["branch", "other"]);
+    run(root, &["commit", "-q", "--allow-empty", "-m", "second"]);
+    let refs = git.references(root).unwrap();
+    let tag = refs.iter().find(|r| r.name == "refs/tags/v1").unwrap();
+    assert_eq!(tag.object_type, "tag");
+    assert!(tag.peeled.is_some());
+    assert!(refs.iter().any(|r| r.name == "refs/heads/other"));
+    let commits = git.history(root, 20).unwrap();
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].parents, vec![commits[1].id.clone()]);
+    assert_eq!(tag.peeled.as_ref(), Some(&commits[1].id));
+    assert_eq!(git.history(root, 1).unwrap().len(), 1);
+    assert!(git.history(root, 0).is_err());
+    assert!(git.history(root, 1001).is_err());
+}
+#[test]
+fn read_only_history_supports_sha256_when_available() {
+    let d = TempDir::new().unwrap();
+    let ok = Command::new("git")
+        .args(["init", "-q", "--object-format=sha256"])
+        .current_dir(d.path())
+        .status()
+        .unwrap()
+        .success();
+    if !ok {
+        eprintln!("SKIP: Git SHA-256 unsupported");
+        return;
+    }
+    run(d.path(), &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let git = Git::discover(None).unwrap();
+    let commits = git.history(d.path(), 1).unwrap();
+    assert_eq!(
+        commits[0].id.algorithm(),
+        rit_core::git_object::ObjectFormat::Sha256
+    );
+    assert_eq!(commits[0].id.as_hex().len(), 64);
+    assert_eq!(
+        git.references(d.path()).unwrap()[0].object.as_hex().len(),
+        64
+    );
+}

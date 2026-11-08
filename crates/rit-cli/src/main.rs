@@ -129,6 +129,53 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             .map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Repository {
+            command: RepositoryCommand::Branches { path, json },
+        } => {
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let refs = git
+                .references(&path)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
+                .into_iter()
+                .filter(|r| {
+                    r.name.starts_with("refs/heads/") || r.name.starts_with("refs/remotes/")
+                })
+                .collect::<Vec<_>>();
+            output::value(
+                &serde_json::json!({"schema_version":1,"references":refs}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Repository {
+            command: RepositoryCommand::Refs { path, json },
+        } => {
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let refs = git
+                .references(&path)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"references":refs}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Repository {
+            command: RepositoryCommand::Log { path, limit, json },
+        } => {
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let commits = git
+                .history(&path, limit)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"commits":commits}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Repository {
             command: RepositoryCommand::List { json },
         } => {
             let data = rit_storage::data_dir(cli.data_dir.as_deref())

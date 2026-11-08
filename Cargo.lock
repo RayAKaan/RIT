@@ -448,6 +448,7 @@ name = "rit-core"
 version = "0.1.0-dev.1"
 dependencies = [
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "toml",
