@@ -1961,3 +1961,118 @@ fn checkpoint_preserves_unmerged_index_deletion_and_refuses_large_files() {
     let list = cli(&["checkpoint", "list", "--repo", rp, "--json"]);
     assert_eq!(list["content_checkpoints"].as_array().unwrap().len(), 1);
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn workspace_intent_survives_killed_rit_and_repair_only_finalizes_matching_metadata() {
+    use std::{
+        io::Write,
+        os::unix::fs::PermissionsExt,
+        process::{Command, Stdio},
+    };
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("base"), "base").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let path = d.path().join("ready");
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        path.to_str().unwrap(),
+        "--name",
+        "ready",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    let listed = cli(&["workspace", "operations", "--repo", rp, "--json"]);
+    let entry = &listed["operations"][0];
+    assert_eq!(entry["operation"]["workspace"], wid);
+    assert_eq!(entry["observation"], "completed");
+    let mut op = entry["operation"].clone();
+    op["state"] = "worktree_verified".into();
+    let refname = format!("refs/rit/operations/{}", op["id"].as_str().unwrap());
+    let previous = entry["object"]["hex"].as_str().unwrap();
+    let mut p = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(&repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    p.stdin
+        .take()
+        .unwrap()
+        .write_all(serde_json::to_string(&op).unwrap().as_bytes())
+        .unwrap();
+    let out = p.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let oid = String::from_utf8(out.stdout).unwrap();
+    git(&["update-ref", &refname, oid.trim(), previous]);
+    let repair = cli(&["workspace", "reconcile", "--repo", rp, "--repair", "--json"]);
+    assert_eq!(repair["metadata_repairs"], 1);
+    assert_eq!(std::fs::read_to_string(path.join("base")).unwrap(), "base");
+    let wrapper = d.path().join("git-kill");
+    std::fs::write(&wrapper,"#!/bin/sh\ncase \"$*\" in *\"worktree add --no-checkout\"*) kill -KILL \"$PPID\"; exit 97;; esac\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let interrupted = d.path().join("interrupted");
+    let out = Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "workspace",
+            "create",
+            "--repo",
+            rp,
+            "--path",
+            interrupted.to_str().unwrap(),
+            "--name",
+            "interrupted",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let ops = cli(&["workspace", "operations", "--repo", rp, "--json"]);
+    let item = ops["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["operation"]["path"] == interrupted.to_str().unwrap())
+        .unwrap();
+    assert_eq!(item["operation"]["state"], "path_reserved");
+    assert_eq!(item["observation"], "worktree_missing_or_incomplete");
+    let branch = item["operation"]["branch"].as_str().unwrap();
+    git(&["rev-parse", "--verify", branch]);
+    assert!(interrupted.is_dir());
+    let repaired = cli(&["workspace", "reconcile", "--repo", rp, "--repair", "--json"]);
+    assert_eq!(repaired["metadata_repairs"], 0);
+    assert!(interrupted.exists());
+    assert_eq!(std::fs::read_to_string(path.join("base")).unwrap(), "base");
+    git(&["rev-parse", "--verify", branch]);
+}

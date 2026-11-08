@@ -1133,7 +1133,7 @@ impl Git {
     ) -> Result<rit_core::workspace::WorkspaceManifest, GitError> {
         use rit_core::{
             git_object::ObjectId,
-            workspace::{WorkspaceId, WorkspaceManifest},
+            workspace::{WorkspaceId, WorkspaceManifest, WorkspaceOperation},
         };
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Err(GitError::Unavailable(
@@ -1201,8 +1201,14 @@ impl Git {
             limitation: None,
         };
         let zero = "0".repeat(commit.as_hex().len());
-        let old = self.workspace_write_manifest(cwd, &manifest, &zero)?;
+        let op_id = WorkspaceId::new();
+        let op_ref = format!("refs/rit/operations/{op_id}");
+        let mut op=WorkspaceOperation{schema_version:1,id:op_id,workspace:id,kind:"workspace_create".into(),path:manifest.path.clone(),branch:branch.clone(),base:commit.clone(),state:"created".into(),failure:None,action:"inspect actual Git worktree and branch before any repair; never delete uncertain data".into()};
+        let mut op_oid = self.write_json_ref(cwd, format, &op_ref, &op, &zero)?;
         let action = (|| -> Result<(), GitError> {
+            let old = self.workspace_write_manifest(cwd, &manifest, &zero)?;
+            op.state = "manifest_reserved".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             let args = [
                 "-c",
                 "core.hooksPath=/dev/null",
@@ -1215,6 +1221,8 @@ impl Git {
             .map(OsString::from)
             .collect::<Vec<_>>();
             self.run(Some(cwd), &args, "workspace branch")?;
+            op.state = "branch_reserved".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             // Exclusive private directory; Git accepts an existing empty directory.
             #[cfg(unix)]
             {
@@ -1233,6 +1241,8 @@ impl Git {
                     "workspace path validation unavailable",
                 ));
             }
+            op.state = "path_reserved".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             let args = vec![
                 "-c".into(),
                 "core.hooksPath=/dev/null".into(),
@@ -1246,6 +1256,8 @@ impl Git {
                     .into(),
             ];
             self.run(Some(cwd), &args, "workspace worktree add")?;
+            op.state = "worktree_created".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             let actual = self
                 .worktrees(cwd)?
                 .into_iter()
@@ -1256,6 +1268,8 @@ impl Git {
             {
                 return Err(GitError::Parse("created worktree mismatch"));
             }
+            op.state = "worktree_verified".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             match self.workspace_materialize(&target, &commit) {
                 Ok(()) => {
                     manifest.state = "ready".into();
@@ -1267,9 +1281,17 @@ impl Git {
                 Err(e) => return Err(e),
             }
             self.workspace_write_manifest(cwd, &manifest, old.as_hex())?;
+            op.state = "completed".into();
+            op.action = "none; reconcile before further lifecycle operations".into();
+            op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             Ok(())
         })();
-        if action.is_err() {
+        if let Err(error) = action {
+            op.failure = Some(format!("provider failed after {}: {}", op.state, error));
+            op.action =
+                "inspect Git inventory and filesystem; do not delete or automatically replay"
+                    .into();
+            let _recorded = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex());
             return Err(GitError::Provisioning { id: id.to_string() });
         }
         Ok(manifest)
@@ -1568,6 +1590,128 @@ impl Git {
             orphan_branches,
             unclaimed_worktrees,
         })
+    }
+    /// Inspect durable workspace operation intents against live Git metadata without deleting data.
+    pub fn workspace_operations(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::workspace::WorkspaceOperationObservation>, GitError> {
+        use rit_core::{
+            git_object::ObjectId,
+            workspace::{WorkspaceOperation, WorkspaceOperationObservation},
+        };
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/operations/",
+            ],
+            "workspace operation refs",
+        )?;
+        let state = self.workspace_reconcile(repo)?;
+        let branches = self.references(repo)?;
+        let trees = self.worktrees(repo)?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 || f[2] != "blob" {
+                return Err(GitError::Parse("workspace operation ref"));
+            }
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace operation read",
+            )?;
+            if raw.len() > 16_384 {
+                return Err(GitError::OutputLimit);
+            }
+            let op: WorkspaceOperation = serde_json::from_slice(&raw)
+                .map_err(|_| GitError::Parse("workspace operation manifest"))?;
+            if op.schema_version != 1
+                || op.kind != "workspace_create"
+                || f[0] != format!("refs/rit/operations/{}", op.id)
+                || op.branch != format!("refs/heads/rit/workspaces/{}", op.workspace)
+                || op.base.algorithm() != format
+                || !Path::new(&op.path).is_absolute()
+                || !matches!(
+                    op.state.as_str(),
+                    "created"
+                        | "manifest_reserved"
+                        | "branch_reserved"
+                        | "path_reserved"
+                        | "worktree_created"
+                        | "worktree_verified"
+                        | "completed"
+                )
+            {
+                return Err(GitError::Parse("workspace operation claims"));
+            }
+            let m = state
+                .workspaces
+                .iter()
+                .find(|w| w.manifest.id == op.workspace);
+            let matches = m.is_some_and(|w| {
+                w.manifest.path == op.path
+                    && w.manifest.branch == op.branch
+                    && w.manifest.base == op.base
+                    && matches!(w.observation.as_str(), "present" | "no_checkout")
+            });
+            let branch_exists = branches.iter().any(|b| b.name == op.branch);
+            let actual = trees
+                .iter()
+                .any(|w| w.path == op.path || w.branch.as_deref() == Some(&op.branch));
+            let observation = if matches {
+                if op.state == "completed" {
+                    "completed"
+                } else {
+                    "completion_not_recorded"
+                }
+            } else if op.state == "completed" {
+                "completed_state_diverged"
+            } else if m.is_none() && branch_exists {
+                "orphan_branch"
+            } else if m.is_none() && actual {
+                "unclaimed_worktree"
+            } else if m.is_none() {
+                "manifest_missing"
+            } else if !branch_exists {
+                "branch_missing"
+            } else if !actual {
+                "worktree_missing_or_incomplete"
+            } else {
+                "needs_reconciliation"
+            };
+            let metadata_repair_possible = matches && op.state != "completed";
+            result.push(WorkspaceOperationObservation {
+                operation: op,
+                object: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
+                observation: observation.into(),
+                metadata_repair_possible,
+            });
+        }
+        Ok(result)
+    }
+    /// CAS-complete only already-matching workspace intents; never changes files or branches.
+    pub fn workspace_repair_operations(&self, repo: &Path) -> Result<usize, GitError> {
+        let format = self.object_format(repo)?;
+        let ops = self.workspace_operations(repo)?;
+        let mut repaired = 0;
+        for item in ops {
+            if item.observation != "completion_not_recorded" || !item.metadata_repair_possible {
+                continue;
+            }
+            let mut op = item.operation;
+            op.state = "completed".into();
+            op.failure = None;
+            op.action =
+                "metadata-only reconciliation; no filesystem or branch repair performed".into();
+            let reference = format!("refs/rit/operations/{}", op.id);
+            self.write_json_ref(repo, format, &reference, &op, item.object.as_hex())?;
+            repaired += 1;
+        }
+        Ok(repaired)
     }
     /// Lock or unlock an identified RIT branch's actual worktree; metadata is not authentication.
     pub fn workspace_lock(

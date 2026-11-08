@@ -367,6 +367,16 @@ pub enum WorkspaceCommand {
     Reconcile {
         #[arg(long)]
         repo: PathBuf,
+        /// Only mark already-complete matching intents; never delete data.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List persistent unauthenticated workspace provisioning intents.
+    Operations {
+        #[arg(long)]
+        repo: PathBuf,
         #[arg(long)]
         json: bool,
     },

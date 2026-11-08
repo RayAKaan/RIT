@@ -165,3 +165,41 @@ pub struct WorkspaceReconciliation {
     /// RIT branches checked out without a valid manifest.
     pub unclaimed_worktrees: Vec<String>,
 }
+
+/// Unauthenticated, Git-ref-backed workspace provisioning intent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceOperation {
+    /// Schema version.
+    pub schema_version: u32,
+    /// Independent opaque operation ID.
+    pub id: WorkspaceId,
+    /// Workspace coordination ID.
+    pub workspace: WorkspaceId,
+    /// Operation kind, currently `workspace_create`.
+    pub kind: String,
+    /// Intended destination.
+    pub path: String,
+    /// Reserved branch.
+    pub branch: String,
+    /// Initial base commit.
+    pub base: crate::git_object::ObjectId,
+    /// Last durably reported step; the filesystem can be ahead of this record.
+    pub state: String,
+    /// Advisory failure evidence, if available.
+    pub failure: Option<String>,
+    /// Operator action; never permission to remove data.
+    pub action: String,
+}
+/// Operation reconciled against current manifest, branch and Git worktree inventory.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkspaceOperationObservation {
+    /// Unaudited operation record.
+    pub operation: WorkspaceOperation,
+    /// CAS object identity for this observation.
+    pub object: crate::git_object::ObjectId,
+    /// Durable-record state versus the currently observed workspace.
+    pub observation: String,
+    /// The operation can be marked completed without modifying any worktree/branch.
+    pub metadata_repair_possible: bool,
+}

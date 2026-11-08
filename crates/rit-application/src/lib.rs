@@ -388,6 +388,17 @@ impl WorkspaceService {
     ) -> Result<rit_core::workspace::WorkspaceReconciliation, ApplicationError> {
         Ok(self.git.workspace_reconcile(repo)?)
     }
+    /// List Git-ref-backed provisioning intents reconciled against live metadata.
+    pub fn operations(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::workspace::WorkspaceOperationObservation>, ApplicationError> {
+        Ok(self.git.workspace_operations(repo)?)
+    }
+    /// Mark already-complete matching intents; never touches files or branches.
+    pub fn repair_operations(&self, repo: &Path) -> Result<usize, ApplicationError> {
+        Ok(self.git.workspace_repair_operations(repo)?)
+    }
     /// Lock or unlock the matched Git worktree.
     pub fn lock(
         &self,
