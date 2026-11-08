@@ -504,3 +504,95 @@ fn commit_only_checkpoint_is_real_and_preserves_all_uncommitted_work() {
     assert_eq!(git(&["rev-parse", "HEAD"]), head);
     assert!(!data.exists());
 }
+
+#[test]
+fn activity_polling_observes_five_real_git_worktrees_and_overlap() {
+    use std::io::{BufRead, BufReader};
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("base");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("shared.py"), "base\n").unwrap();
+    git(&["add", "shared.py"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let mut trees = Vec::new();
+    for i in 0..5 {
+        let path = d.path().join(format!("wt{i}"));
+        git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("test{i}"),
+            path.to_str().unwrap(),
+            "HEAD",
+        ]);
+        trees.push(path);
+    }
+    std::fs::write(trees[0].join("shared.py"), "one\n").unwrap();
+    std::fs::write(trees[1].join("shared.py"), "two\n").unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .arg("--data-dir")
+        .arg(d.path().join("none"))
+        .args([
+            "activity",
+            "watch",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--interval-ms",
+            "250",
+            "--count",
+            "2",
+            "--json",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let first: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(first["activity"]["worktrees"].as_array().unwrap().len(), 6);
+    assert_eq!(first["activity"]["overlaps"][0]["path"], "shared.py");
+    assert_eq!(
+        first["activity"]["overlaps"][0]["worktrees"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(first["activity"]["complete_event_history"], false);
+    std::fs::write(trees[2].join("shared.py"), "three\n").unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    let second: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        second["activity"]["overlaps"][0]["worktrees"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(child.wait().unwrap().success());
+    assert!(!d.path().join("none").exists());
+}

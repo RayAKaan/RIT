@@ -292,3 +292,5 @@ impl GitCheckpointService {
         Ok(self.git.checkpoint_verify(repo, id)?)
     }
 }
+/// Ephemeral activity observations from real Git worktrees.
+pub mod activity;

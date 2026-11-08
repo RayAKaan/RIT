@@ -68,6 +68,11 @@ pub enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Reconcile live Git activity without persistent event history.
+    Activity {
+        #[command(subcommand)]
+        command: ActivityCommand,
+    },
     /// Analyze committed source dependencies without registry access.
     Dependencies {
         #[command(subcommand)]
@@ -420,5 +425,41 @@ pub enum McpCommand {
     Serve {
         #[arg(long)]
         repo: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ActivityCommand {
+    /// Reconcile current Git worktree state once.
+    Reconcile {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List current Git worktree observations (not historical events).
+    List {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report exact-path overlap, not necessarily conflicts.
+    Overlaps {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Poll Git snapshots a finite number of times; intermediate events can be missed.
+    Watch {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long, default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long, default_value_t = 10)]
+        count: u32,
+        #[arg(long)]
+        json: bool,
     },
 }

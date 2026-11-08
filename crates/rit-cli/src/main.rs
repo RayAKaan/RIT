@@ -5,8 +5,8 @@ mod output;
 
 use clap::Parser;
 use cli::{
-    CheckpointCommand, Cli, Command, ConfigCommand, DependenciesCommand, McpCommand,
-    RepositoryCommand, StorageCommand,
+    ActivityCommand, CheckpointCommand, Cli, Command, ConfigCommand, DependenciesCommand,
+    McpCommand, RepositoryCommand, StorageCommand,
 };
 use rit_core::{
     config::{self, ConfigFile, Overrides},
@@ -107,6 +107,47 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 .transpose()
                 .map_err(|e| (RUNTIME_FAILURE, e))?;
             rit_protocol::serve_stdio(scope).map_err(|e| (RUNTIME_FAILURE, e.to_string()))
+        }
+        Command::Activity { command } => {
+            let (repo, json, count, interval, only_overlaps) = match command {
+                ActivityCommand::Reconcile { repo, json }
+                | ActivityCommand::List { repo, json } => (repo, json, 1, 0, false),
+                ActivityCommand::Overlaps { repo, json } => (repo, json, 1, 0, true),
+                ActivityCommand::Watch {
+                    repo,
+                    json,
+                    count,
+                    interval_ms,
+                } => (repo, json, count, interval_ms, false),
+            };
+            if count == 0 || count > 1000 || (count > 1 && !(250..=60_000).contains(&interval)) {
+                return Err((
+                    RUNTIME_FAILURE,
+                    "activity count must be 1..1000 and interval 250..60000 milliseconds".into(),
+                ));
+            }
+            let service = rit_application::GitReadService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            for n in 0..count {
+                if n > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(interval));
+                }
+                let snapshot = service
+                    .activity_snapshot(&repo)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                let result = if only_overlaps {
+                    serde_json::json!({"schema_version":1,"observed_at":snapshot.observed_at,"overlaps":snapshot.overlaps,"complete_event_history":false})
+                } else {
+                    serde_json::json!({"schema_version":1,"activity":snapshot})
+                };
+                output::value(&result, json).map_err(|e| (RUNTIME_FAILURE, e))?;
+                use std::io::Write as _;
+                std::io::stdout()
+                    .flush()
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            }
+            Ok(())
         }
         Command::Dependencies { command } => {
             let (repo, json) = match command {
