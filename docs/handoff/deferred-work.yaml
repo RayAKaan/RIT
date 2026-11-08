@@ -17,7 +17,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/tests/crash_recovery.rs"
-      ]
+      ],
+      "reproduction_command": "cargo test --locked -p rit-storage --test crash_recovery marked_registry_recovers_hot_journal_after_killed_writer -- --nocapture",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Design independently bound writable recovery; keep journal intact"
     },
     {
       "id": "RIT-SEC-002",
@@ -35,7 +39,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/tests/registry.rs"
-      ]
+      ],
+      "reproduction_command": "cargo test --locked -p rit-storage --test registry refuses_replaced_marked_database_even_if_schema_and_application_id_match -- --nocapture",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Prove durable identity without SQLite lock/alias violations"
     },
     {
       "id": "RIT-SEC-003",
@@ -53,7 +61,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "docs/RIT_DECISIONS.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Design and implement durable protected binding and recovery with independent review"
     },
     {
       "id": "RIT-SEC-004",
@@ -71,7 +83,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/src/secure_dir.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement macOS directory, ACL, file identity and sidecar protection"
     },
     {
       "id": "RIT-SEC-005",
@@ -89,7 +105,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/src/secure_dir.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement Windows handle-based storage security"
     },
     {
       "id": "RIT-SEC-006",
@@ -107,7 +127,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/src/lib.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement confirmed intent, SQLite backup API and recovery protocol"
     },
     {
       "id": "RIT-SEC-007",
@@ -125,7 +149,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "docs/security/storage-threat-model.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "storage security",
+      "required_implementation": "Commission independent implementation and threat model review"
     },
     {
       "id": "RIT-SEC-008",
@@ -143,7 +171,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-storage/src/secure_dir.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "Linux storage",
+      "required_implementation": "Review Linux trust model and exercise second UID and races"
     },
     {
       "id": "RIT-OPS-001",
@@ -161,7 +193,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "docs/RIT_STATUS.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "delivery",
+      "required_implementation": "Publish ordered branches and open PRs without force push"
     },
     {
       "id": "RIT-SEC-009",
@@ -182,7 +218,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-application/src/contracts.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "identity and authorization",
+      "required_implementation": "Implement authenticated actor, secure credential lifecycle, central enforcement and transactional audit"
     },
     {
       "id": "RIT-SEC-010",
@@ -200,7 +240,11 @@
       "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
       "files": [
         "crates/rit-application/src/lib.rs"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "existing repository commands",
+      "required_implementation": "Integrate common authenticated service boundary without breaking safe Git inspection"
     },
     {
       "id": "RIT-P04-001",
@@ -220,7 +264,11 @@
       "verification": "Native isolation escape/resource/cleanup tests",
       "files": [
         "docs/phases/phase-4-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "workspace/isolation",
+      "required_implementation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits"
     },
     {
       "id": "RIT-P05-001",
@@ -240,7 +288,11 @@
       "verification": "Real Git changes, restart and event-loss tests",
       "files": [
         "docs/phases/phase-5-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "activity",
+      "required_implementation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation"
     },
     {
       "id": "RIT-P06-001",
@@ -260,7 +312,11 @@
       "verification": "Disposable Git integration, crash, conflict and special-file tests",
       "files": [
         "docs/phases/phase-6-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "checkpoint",
+      "required_implementation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies"
     },
     {
       "id": "RIT-P07-001",
@@ -280,7 +336,11 @@
       "verification": "Concurrent target changes, retries, source preservation and failure injection",
       "files": [
         "docs/phases/phase-7-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "integration",
+      "required_implementation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation"
     },
     {
       "id": "RIT-P08-001",
@@ -300,7 +360,11 @@
       "verification": "Language fixtures and no-overwrite integration tests",
       "files": [
         "docs/phases/phase-8-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "conflict",
+      "required_implementation": "Implement tested tree-sitter/Mergiraf adapters, text conflict analysis and human review"
     },
     {
       "id": "RIT-P09-001",
@@ -320,7 +384,11 @@
       "verification": "Real repository fixtures, stale/partial evidence and language coverage tests",
       "files": [
         "docs/phases/phase-9-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "impact",
+      "required_implementation": "Implement versioned source extraction, symbol/API mapping and test/workspace recommendations"
     },
     {
       "id": "RIT-P10-001",
@@ -340,7 +408,11 @@
       "verification": "Adversarial authorization and Rust/TS/Python interoperability tests",
       "files": [
         "docs/phases/phase-10-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "protocol",
+      "required_implementation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs"
     },
     {
       "id": "RIT-P11-001",
@@ -360,7 +432,11 @@
       "verification": "End-to-end, fault-injection, backup, recovery and benchmark evidence",
       "files": [
         "docs/phases/phase-11-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "collaboration/reliability",
+      "required_implementation": "Implement candidate-bound reviews, operations, backup/reconciliation and failure/concurrency harness"
     },
     {
       "id": "RIT-P12-001",
@@ -380,7 +456,11 @@
       "verification": "Document native results and passing release/security gates",
       "files": [
         "docs/phases/phase-12-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "release",
+      "required_implementation": "Perform native testing, independent security review, migrations, packaging and release checks"
     },
     {
       "id": "RIT-P10-002",
@@ -400,7 +480,11 @@
       "verification": "Automated TypeScript SDK interoperability tests",
       "files": [
         "docs/phases/phase-10-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "typescript sdk",
+      "required_implementation": "Typecheck and run against stdio transport with protocol/error fixtures"
     },
     {
       "id": "RIT-P03-001",
@@ -420,7 +504,11 @@
       "verification": "Forgery, revocation, atomic audit and truncation/rollback tests",
       "files": [
         "docs/phases/phase-3-report.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "audit/authentication",
+      "required_implementation": "Design safe provider-issued authenticated context and independently protected audit anchors"
     },
     {
       "id": "RIT-OPS-002",
@@ -439,7 +527,11 @@
       "files": [
         ".gitignore",
         "docs/handoff/LOCAL_AGENT_REMEDIATION_REPORT.md"
-      ]
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "handoff history",
+      "required_implementation": "Obtain owner decision and review before full-history distribution, or use an independently audited history-redaction procedure with explicit authorization."
     }
   ]
 }
