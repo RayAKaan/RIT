@@ -13,8 +13,8 @@ const queue=[];readline.createInterface({input:child.stdout}).on('line',line=>{c
 child.on('error',err=>{for(const pending of queue.splice(0))pending.reject(err);});
 const transport=request=>new Promise((resolve,reject)=>{queue.push({resolve,reject});child.stdin.write(JSON.stringify(request)+'\n');});
 (async()=>{const client=new Client(transport);
-  const list=await client.request('tools/list');assert.equal(list.tools.length,10);
-  for (const [name,field] of [["workspace.list","reconciliation"],["checkpoint.list","content_checkpoints"],["submission.list","submissions"],["candidate.list","candidates"]]) {
+  const list=await client.request('tools/list');assert.equal(list.tools.length,13);
+  for (const [name,field] of [["workspace.list","reconciliation"],["checkpoint.list","content_checkpoints"],["submission.list","submissions"],["candidate.list","candidates"],["workspace.operations","operations"],["checkpoint.restores","restores"],["submission.reconcile","submissions"]]) {
     const data=(await client.request("tools/call",{name,arguments:{}})).structuredContent;assert.ok(field in data);assert.equal(data.authenticated,false);
   }
   const result=await client.request('tools/call',{name:'repository.inspect',arguments:{}});assert.equal(result.structuredContent.inspection.object_format,'sha1');

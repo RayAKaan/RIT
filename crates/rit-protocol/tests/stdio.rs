@@ -105,7 +105,7 @@ fn scoped_mcp_reads_real_repository_and_denies_mutations_and_paths() {
         serde_json::from_str::<serde_json::Value>(&s).unwrap()
     };
     let list = call(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 13);
     let result = call(
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repository.inspect","arguments":{}}}),
     );
@@ -250,6 +250,13 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
     checkpoints
         .verify_content(&repo, checkpoint.manifest.id)
         .unwrap();
+    let restore = checkpoints
+        .restore_new(&repo, checkpoint.manifest.id, &d.path().join("recovered"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("recovered/feature.py")).unwrap(),
+        "import app\n"
+    );
     git(work, &["add", "."]);
     git(work, &["commit", "-qm", "feature"]);
     let submissions = rit_application::submissions::SubmissionService::new(provider.clone());
@@ -294,6 +301,21 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     for (name, field, id) in [
         ("workspace.list", "reconciliation", workspace.id.to_string()),
+        (
+            "workspace.operations",
+            "operations",
+            workspace.id.to_string(),
+        ),
+        (
+            "checkpoint.restores",
+            "restores",
+            restore.operation.id.to_string(),
+        ),
+        (
+            "submission.reconcile",
+            "submissions",
+            submission.id.to_string(),
+        ),
         (
             "checkpoint.list",
             "content_checkpoints",

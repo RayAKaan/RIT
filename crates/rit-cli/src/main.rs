@@ -161,6 +161,7 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             emit(
                 &serde_json::json!({"schema_version":1,"type":"watch_started","activity":initial,"complete_event_history":false}),
             )?;
+            let mut previous = initial;
             let start = std::time::Instant::now();
             let mut last = start;
             loop {
@@ -177,6 +178,11 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 {
                     emit(
                         &serde_json::json!({"schema_version":1,"type":"notifications","batch":batch}),
+                    )?;
+                }
+                if batch.overflowed {
+                    emit(
+                        &serde_json::json!({"schema_version":1,"type":"event_loss","reason":"watcher buffer overflow or rescan; intermediate events are unrecoverable","complete_event_history":false}),
                     )?;
                 }
                 if batch.watcher_error {
@@ -197,9 +203,12 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     let snapshot = service
                         .activity_snapshot(&repo)
                         .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    let transitions =
+                        rit_application::activity::compare_snapshots(&previous, &snapshot);
                     emit(
-                        &serde_json::json!({"schema_version":1,"type":"git_reconciliation","activity":snapshot,"gap_possible":batch.overflowed||batch.watcher_error}),
+                        &serde_json::json!({"schema_version":1,"type":"git_reconciliation","activity":snapshot,"transitions":transitions,"gap_possible":batch.overflowed||batch.watcher_error}),
                     )?;
+                    previous = snapshot;
                     last = std::time::Instant::now();
                 }
             }
@@ -650,7 +659,7 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 let item = service
                     .verify_content(&repo, id)
                     .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-                output::value(&serde_json::json!({"schema_version":1,"checkpoint":item,"git_fsck":"passed","manifest_tree_consistency":"passed","authenticity":"not_verified","atomic_completeness":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+                output::value(&serde_json::json!({"schema_version":1,"checkpoint":item,"git_fsck":"passed","manifest_tree_consistency":"passed","index_stage_consistency":"passed","submodule_content":"not_verified","lfs_payload":"not_verified","authenticity":"not_verified","atomic_completeness":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
             } else {
                 let item = service
                     .verify(&repo, id)

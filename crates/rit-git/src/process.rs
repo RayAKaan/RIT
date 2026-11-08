@@ -2390,7 +2390,65 @@ impl Git {
                 return Err(GitError::Parse("checkpoint manifest/tree mismatch"));
             }
         }
+        self.checkpoint_verify_index(repo, &c.manifest)?;
         Ok(c)
+    }
+    fn checkpoint_verify_index(
+        &self,
+        repo: &Path,
+        manifest: &rit_core::checkpoint::ContentCheckpoint,
+    ) -> Result<Vec<u8>, GitError> {
+        use std::io::Write;
+        let inspected = self.inspect(repo)?;
+        let root = Path::new(inspected.worktree.as_deref().ok_or(GitError::Unavailable(
+            "checkpoint index verification requires a worktree",
+        ))?);
+        let index = self.conflict_blob(repo, &manifest.index_blob)?;
+        let mut temp = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
+        temp.write_all(&index).map_err(GitError::Launch)?;
+        temp.flush().map_err(GitError::Launch)?;
+        let env = [("GIT_INDEX_FILE", temp.path().as_os_str().into())];
+        let args = ["rev-parse", "--shared-index-path"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (shared, _) = self.run_internal(
+            Some(root),
+            &args,
+            "workspace restore shared-index check",
+            &env,
+            false,
+            None,
+        )?;
+        if !shared.iter().all(u8::is_ascii_whitespace) {
+            return Err(GitError::Unavailable(
+                "split-index verification is unavailable",
+            ));
+        }
+        let args = ["ls-files", "--stage", "-z"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (actual, _) = self.run_internal(
+            Some(root),
+            &args,
+            "workspace restore index check",
+            &env,
+            false,
+            None,
+        )?;
+        let mut expected = Vec::new();
+        for e in &manifest.staged {
+            expected.extend_from_slice(
+                format!("{} {} {}\t{}\0", e.mode, e.object.as_hex(), e.stage, e.path).as_bytes(),
+            );
+        }
+        if actual != expected {
+            return Err(GitError::Parse(
+                "captured index entries disagree with raw index",
+            ));
+        }
+        Ok(index)
     }
     fn checkpoint_restore_prepare(
         &self,
@@ -2399,7 +2457,6 @@ impl Git {
         dest: &Path,
     ) -> Result<PreparedRestore, GitError> {
         use rit_core::checkpoint::RestorePlan;
-        use std::io::Write;
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Err(GitError::Unavailable(
                 "restore unsupported on this platform",
@@ -2432,51 +2489,7 @@ impl Git {
                 return Err(GitError::Parse("restore destination overlaps worktree"));
             }
         }
-        let index = self.conflict_blob(repo, &c.manifest.index_blob)?;
-        let mut temp = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
-        temp.write_all(&index).map_err(GitError::Launch)?;
-        temp.flush().map_err(GitError::Launch)?;
-        let env = [("GIT_INDEX_FILE", temp.path().as_os_str().into())];
-        let args = ["rev-parse", "--shared-index-path"]
-            .into_iter()
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        let (shared, _) = self.run_internal(
-            Some(repo),
-            &args,
-            "workspace restore shared-index check",
-            &env,
-            false,
-            None,
-        )?;
-        if !shared.iter().all(u8::is_ascii_whitespace) {
-            return Err(GitError::Unavailable(
-                "split-index restoration is unavailable",
-            ));
-        }
-        let args = ["ls-files", "--stage", "-z"]
-            .into_iter()
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        let (actual, _) = self.run_internal(
-            Some(repo),
-            &args,
-            "workspace restore index check",
-            &env,
-            false,
-            None,
-        )?;
-        let mut expected = Vec::new();
-        for e in &c.manifest.staged {
-            expected.extend_from_slice(
-                format!("{} {} {}\t{}\0", e.mode, e.object.as_hex(), e.stage, e.path).as_bytes(),
-            );
-        }
-        if actual != expected {
-            return Err(GitError::Parse(
-                "captured index entries disagree with raw index",
-            ));
-        }
+        let index = self.checkpoint_verify_index(repo, &c.manifest)?;
         let mut files = Vec::new();
         let mut create_paths = Vec::new();
         let mut deleted_paths = Vec::new();

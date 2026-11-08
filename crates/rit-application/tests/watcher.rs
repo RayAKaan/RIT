@@ -51,3 +51,92 @@ fn bounded_queue_reports_overflow_and_restart_reconciles() {
     }
     assert!(seen, "watch did not resume after restart");
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn git_snapshot_transitions_use_real_index_head_and_lock_evidence() {
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("a.py"), "x=0\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let provider = rit_git::Git::discover(None).unwrap();
+    let work = d.path().join("work");
+    let ws = rit_application::WorkspaceService::new(provider.clone());
+    let manifest = ws.create(&repo, &work, "events", "HEAD").unwrap();
+    let service = rit_application::GitReadService::new(provider);
+    let before = service.activity_snapshot(&repo).unwrap();
+    std::fs::write(work.join("a.py"), "x=1\n").unwrap();
+    git(&work, &["add", "a.py"]);
+    let staged = service.activity_snapshot(&repo).unwrap();
+    let delta = rit_application::activity::compare_snapshots(&before, &staged);
+    assert!(
+        delta
+            .transitions
+            .iter()
+            .any(|t| t.kind == "index_status_changed"
+                && t.path.as_deref() == Some("a.py")
+                && t.after.as_deref() == Some("M"))
+    );
+    assert!(!delta.complete_event_history);
+    git(&work, &["commit", "-qm", "change"]);
+    let committed = service.activity_snapshot(&repo).unwrap();
+    let delta = rit_application::activity::compare_snapshots(&staged, &committed);
+    assert!(
+        delta
+            .transitions
+            .iter()
+            .any(|t| t.kind == "head_commit_changed" && t.before != t.after)
+    );
+    assert!(
+        delta
+            .transitions
+            .iter()
+            .any(|t| t.kind == "index_status_changed"
+                && t.path.as_deref() == Some("a.py")
+                && t.after.is_none())
+    );
+    ws.lock(&repo, manifest.id, Some("test")).unwrap();
+    let locked = service.activity_snapshot(&repo).unwrap();
+    let delta = rit_application::activity::compare_snapshots(&committed, &locked);
+    assert!(
+        delta
+            .transitions
+            .iter()
+            .any(|t| t.kind == "worktree_lock_changed" && t.after.as_deref() == Some("true"))
+    );
+    ws.lock(&repo, manifest.id, None).unwrap();
+    let mut unknown = service.activity_snapshot(&repo).unwrap();
+    for entry in &mut unknown.worktrees {
+        if entry.worktree.path == work.to_str().unwrap() {
+            entry.status = None;
+        }
+    }
+    let delta = rit_application::activity::compare_snapshots(&staged, &unknown);
+    assert!(
+        !delta
+            .transitions
+            .iter()
+            .any(|t| t.kind == "index_status_changed")
+    );
+}
