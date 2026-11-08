@@ -249,6 +249,31 @@ impl GitReadService {
             self.git.source_snapshot_worktree(path)?,
         )?)
     }
+    /// Analyze the staged source blobs in a worktree index, separately from unstaged bytes.
+    pub fn dependencies_index(
+        &self,
+        path: &Path,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        Ok(rit_analysis::repository_graph(
+            self.git.source_snapshot_index(path)?,
+        )?)
+    }
+    /// Analyze an identified managed workspace's rechecked index.
+    pub fn dependencies_workspace_index(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        let state = self.git.workspace_reconcile(repo)?;
+        let w = state
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id && w.observation == "present")
+            .ok_or(ApplicationError::Git(GitError::Unavailable(
+                "workspace is not present and ready",
+            )))?;
+        self.dependencies_index(Path::new(&w.manifest.path))
+    }
     /// Analyze an identified managed worktree after reconciling it against Git inventory.
     pub fn dependencies_workspace(
         &self,

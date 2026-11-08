@@ -3737,3 +3737,238 @@ fn interrupted_checkpoint_extraction_is_discoverable_and_never_cleaned_up() {
     );
     assert!(dest.exists());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn staged_dependency_graph_uses_index_not_unstaged_bytes_and_reports_impact_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        text(&o.stdout)
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("a.py"), "a=1\n").unwrap();
+    std::fs::write(repo.join("b.py"), "b=1\n").unwrap();
+    std::fs::write(repo.join("use.py"), "import a\n").unwrap();
+    std::fs::write(repo.join("test_use.py"), "import use\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{a:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "stage",
+        "--json",
+    ]);
+    let id = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("use.py"), "import b\n").unwrap();
+    git(&work, &["add", "use.py"]);
+    std::fs::write(work.join("use.py"), "import a\n").unwrap();
+    std::fs::write(work.join("untracked.py"), "import b\n").unwrap();
+    let index_before = git(&work, &["ls-files", "--stage"]);
+    let staged = cli(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--staged",
+        "--json",
+    ]);
+    assert!(
+        staged["graph"]["snapshot_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("index-sha256:")
+    );
+    assert_eq!(staged["graph"]["non_atomic"], true);
+    let edges = staged["graph"]["edges"].as_array().unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["dependent"] == "use.py" && e["dependency"] == "b.py")
+    );
+    assert!(
+        !staged["graph"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "untracked.py")
+    );
+    let live = cli(&[
+        "dependencies",
+        "inspect",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--json",
+    ]);
+    assert!(
+        live["graph"]["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["dependent"] == "use.py" && e["dependency"] == "a.py")
+    );
+    assert!(
+        live["graph"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "untracked.py")
+    );
+    let impact = cli(&[
+        "impact",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--staged",
+        "--files",
+        "b.py",
+        "--json",
+    ]);
+    let report = &impact["reports"][0];
+    assert!(
+        report["known_dependents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "use.py")
+    );
+    assert!(
+        report["evidence_edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["dependent"] == "use.py" && e["dependency"] == "b.py")
+    );
+    assert!(
+        report["suggested_test_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["path"] == "test_use.py" && e["coverage_guaranteed"] == false)
+    );
+    assert_eq!(git(&work, &["ls-files", "--stage"]), index_before);
+    assert_eq!(
+        std::fs::read_to_string(work.join("use.py")).unwrap(),
+        "import a\n"
+    );
+    let inferred = cli(&[
+        "impact",
+        "--repo",
+        rp,
+        "--workspace",
+        id,
+        "--staged",
+        "--json",
+    ]);
+    assert_eq!(inferred["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(inferred["reports"][0]["changed"], "use.py");
+    // Change the actual index between the two ls-files observations; recheck must fail.
+    let wrapper = d.path().join("pause-index-check");
+    std::fs::write(&wrapper,"#!/bin/sh\ncase \"$*\" in *\"ls-files -z --stage\"*) n=0; if [ -f \"$V6_COUNT\" ]; then read -r n < \"$V6_COUNT\"; fi; n=$((n+1)); printf '%s\\n' \"$n\" > \"$V6_COUNT\"; if [ \"$n\" = 2 ]; then printf x > \"$V6_READY\"; while [ ! -f \"$V6_CONTINUE\" ]; do :; done; fi;; esac\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let ready = d.path().join("ready");
+    let signal = d.path().join("continue");
+    let mut process = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .env("V6_COUNT", d.path().join("count"))
+        .env("V6_READY", &ready)
+        .env("V6_CONTINUE", &signal)
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "dependencies",
+            "inspect",
+            "--repo",
+            rp,
+            "--workspace",
+            id,
+            "--staged",
+            "--json",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        if process.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        let _ = process.kill();
+        panic!("staged index recheck did not pause")
+    }
+    std::fs::write(work.join("use.py"), "import a\n").unwrap();
+    git(&work, &["add", "use.py"]);
+    std::fs::write(&signal, "continue").unwrap();
+    let raced = process.wait_with_output().unwrap();
+    assert!(!raced.status.success());
+    assert!(
+        text(&raced.stderr).contains("index changed during staged analysis"),
+        "{}",
+        text(&raced.stderr)
+    );
+    // A source file with unmerged stages cannot be represented as one staged graph.
+    use std::io::Write;
+    let oid = git(&work, &["rev-parse", "HEAD:use.py"]).trim().to_string();
+    git(&work, &["update-index", "--force-remove", "--", "use.py"]);
+    let mut child = std::process::Command::new("git")
+        .current_dir(&work)
+        .args(["update-index", "--index-info"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        for stage in 1..=3 {
+            writeln!(stdin, "100644 {oid} {stage}\tuse.py").unwrap();
+        }
+    }
+    assert!(child.wait().unwrap().success());
+    let conflict = run(
+        &[
+            "dependencies",
+            "inspect",
+            "--repo",
+            rp,
+            "--workspace",
+            id,
+            "--staged",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!conflict.status.success());
+    assert!(text(&conflict.stderr).contains("unmerged source index entries"));
+}

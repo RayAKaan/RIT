@@ -583,13 +583,14 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             .map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Dependencies { command } => {
-            let (repo, commit, branch, worktree, workspace, json) = match command {
+            let (repo, commit, branch, worktree, workspace, staged, json) = match command {
                 DependenciesCommand::Inspect {
                     repo,
                     commit,
                     branch,
                     worktree,
                     workspace,
+                    staged,
                     json,
                 }
                 | DependenciesCommand::Refresh {
@@ -598,8 +599,9 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     branch,
                     worktree,
                     workspace,
+                    staged,
                     json,
-                } => (repo, commit, branch, worktree, workspace, json),
+                } => (repo, commit, branch, worktree, workspace, staged, json),
             };
             let service = rit_application::GitReadService::new(
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
@@ -608,7 +610,13 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 let id = id
                     .parse()
                     .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
-                service.dependencies_workspace(&repo, id)
+                if staged {
+                    service.dependencies_workspace_index(&repo, id)
+                } else {
+                    service.dependencies_workspace(&repo, id)
+                }
+            } else if staged {
+                service.dependencies_index(&repo)
             } else if worktree {
                 service.dependencies_worktree(&repo)
             } else if let Some(revision) = commit.as_deref().or(branch.as_deref()) {
@@ -628,6 +636,7 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             branch,
             worktree,
             workspace,
+            staged,
         } => {
             let service = rit_application::GitReadService::new(
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
@@ -636,7 +645,13 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 let id = id
                     .parse()
                     .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
-                service.dependencies_workspace(&repo, id)
+                if staged {
+                    service.dependencies_workspace_index(&repo, id)
+                } else {
+                    service.dependencies_workspace(&repo, id)
+                }
+            } else if staged {
+                service.dependencies_index(&repo)
             } else if worktree {
                 service.dependencies_worktree(&repo)
             } else if let Some(revision) = commit.as_deref().or(branch.as_deref()) {
@@ -678,12 +693,24 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     .ok_or((RUNTIME_FAILURE, "workspace status unavailable".into()))?
                     .changes
                     .into_iter()
+                    .filter(|c| {
+                        !staged
+                            || c.xy
+                                .as_deref()
+                                .is_some_and(|xy| xy.as_bytes().first().is_some_and(|v| *v != b'.'))
+                    })
                     .map(|c| c.path)
                     .collect()
             } else {
                 files
             };
-            let reports=files.iter().map(|file| {let impact=domain.impact(file,&graph.commit.to_string());serde_json::json!({"changed":file,"known_dependents":impact.known_dependents,"complete":false})}).collect::<Vec<_>>();
+            let reports=files.iter().map(|file| {
+                let impact=domain.impact(file,&graph.commit.to_string());
+                let affected:std::collections::BTreeSet<&str>=impact.known_dependents.iter().map(String::as_str).collect();
+                let evidence=graph.edges.iter().filter(|e|affected.contains(e.dependent.as_str())&&(e.dependency==*file||affected.contains(e.dependency.as_str()))).collect::<Vec<_>>();
+                let recommendations=impact.known_dependents.iter().filter(|p|{let name=p.rsplit('/').next().unwrap_or(p);(name.starts_with("test_")&&name.ends_with(".py"))||name.ends_with("_test.go")||name.ends_with(".test.ts")||name.ends_with(".spec.ts")}).map(|p|serde_json::json!({"path":p,"basis":"heuristic test-file name among graph-reachable dependents; see evidence_edges","coverage_guaranteed":false})).collect::<Vec<_>>();
+                serde_json::json!({"changed":file,"known_dependents":impact.known_dependents,"evidence_edges":evidence,"suggested_test_files":recommendations,"complete":false})
+            }).collect::<Vec<_>>();
             output::value(&serde_json::json!({"schema_version":1,"commit":graph.commit,"snapshot_id":graph.snapshot_id,"non_atomic":graph.non_atomic,"reports":reports,"unresolved":graph.unresolved,"problematic_files":graph.problematic_files,"omitted_non_regular":graph.omitted_non_regular,"complete":false,"scope":graph.scope}),json).map_err(|e|(RUNTIME_FAILURE,e))
         }
         Command::Checkpoint {

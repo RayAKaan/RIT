@@ -851,6 +851,124 @@ impl Git {
             scope: "non-atomic worktree observation of tracked and untracked supported files; ignored files excluded; staged bytes are not separately analyzed",
         })
     }
+    /// Observe staged source blobs from the real Git index, separately from unstaged worktree bytes.
+    /// The index and HEAD are rechecked, but no atomicity or authenticated provenance is claimed.
+    pub fn source_snapshot_index(
+        &self,
+        input: &Path,
+    ) -> Result<rit_core::git_object::SourceSnapshot, GitError> {
+        use rit_core::git_object::{ObjectFormat, ObjectId, SourceFile, SourceSnapshot};
+        use sha2::{Digest, Sha256};
+        let ins = self.inspect(input)?;
+        let root = ins
+            .worktree
+            .as_deref()
+            .ok_or(GitError::Unavailable("bare repository has no index"))?;
+        let head = match ins.head {
+            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+            Head::Unborn { .. } => {
+                return Err(GitError::Unavailable("unborn index analysis not supported"));
+            }
+        };
+        let format =
+            ObjectFormat::parse(&ins.object_format).ok_or(GitError::Parse("object format"))?;
+        let commit = ObjectId::new(format, &head).map_err(GitError::Parse)?;
+        let args = ["ls-files", "-z", "--stage"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let raw = self.run(
+            Some(Path::new(root)),
+            &args,
+            "workspace index analysis list",
+        )?;
+        if !raw.is_empty() && !raw.ends_with(&[0]) {
+            return Err(GitError::Parse("index analysis terminator"));
+        }
+        let mut selected = Vec::new();
+        let mut omitted = 0usize;
+        for row in raw.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let tab = row
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or(GitError::Parse("index analysis row"))?;
+            let path = std::str::from_utf8(&row[tab + 1..]).map_err(|_| GitError::NonUnicode)?;
+            if !(path.ends_with(".py")
+                || path.ends_with(".ts")
+                || path.ends_with(".go")
+                || path == "go.mod"
+                || path.ends_with("/go.mod"))
+            {
+                continue;
+            }
+            validate_checkpoint_path(path)?;
+            let meta = std::str::from_utf8(&row[..tab]).map_err(|_| GitError::NonUnicode)?;
+            let f = meta.split(' ').collect::<Vec<_>>();
+            if f.len() != 3 {
+                return Err(GitError::Parse("index analysis metadata"));
+            }
+            if f[2] != "0" {
+                return Err(GitError::Unavailable(
+                    "unmerged source index entries cannot form a single staged graph",
+                ));
+            }
+            if !matches!(f[0], "100644" | "100755") {
+                omitted += 1;
+                continue;
+            }
+            selected.push((
+                path.to_owned(),
+                ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
+            ));
+            if selected.len() > 500 {
+                return Err(GitError::Unavailable(
+                    "staged source file count exceeds 500",
+                ));
+            }
+        }
+        let mut files = Vec::new();
+        let mut total = 0usize;
+        for (path, oid) in selected {
+            let bytes = self.bounded_blob(Path::new(root), &oid, 1_048_576)?;
+            total = total
+                .checked_add(bytes.len())
+                .ok_or(GitError::OutputLimit)?;
+            if total > 8_388_608 {
+                return Err(GitError::Unavailable("staged source exceeds 8 MiB"));
+            }
+            files.push(SourceFile { path, bytes });
+        }
+        let after = self.run(
+            Some(Path::new(root)),
+            &args,
+            "workspace index analysis recheck",
+        )?;
+        if after != raw {
+            return Err(GitError::Unavailable(
+                "index changed during staged analysis",
+            ));
+        }
+        let after_head = self.query(
+            Path::new(root),
+            &["rev-parse", "--verify", "HEAD"],
+            "workspace index analysis HEAD",
+        )?;
+        if after_head != head {
+            return Err(GitError::Unavailable("HEAD changed during staged analysis"));
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"rit-index-source-v1\0");
+        digest.update(head.as_bytes());
+        digest.update(&raw);
+        Ok(SourceSnapshot {
+            commit,
+            files,
+            omitted_non_regular: omitted,
+            snapshot_id: format!("index-sha256:{:x}", digest.finalize()),
+            non_atomic: true,
+            scope: "rechecked Git index stage-0 source blobs; excludes unstaged, untracked and ignored bytes; can change or be reverted between observations",
+        })
+    }
     /// Simulate an isolated Git merge in a temporary object directory; no refs or worktrees are changed.
     /// Custom driver configuration is refused. The temporary merge tree is not retained.
     pub fn simulate_merge(

@@ -88,17 +88,20 @@ pub enum Command {
         #[arg(long)]
         repo: PathBuf,
         /// Analyze the specified commit rather than HEAD.
-        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace", "staged"])]
         commit: Option<String>,
         /// Analyze the specified branch rather than HEAD.
-        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace", "staged"])]
         branch: Option<String>,
         /// Analyze non-atomic tracked and untracked worktree source bytes.
-        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        #[arg(long, conflicts_with_all=["commit","branch","workspace","staged"])]
         worktree: bool,
         /// Analyze an identified RIT-managed worktree.
         #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
         workspace: Option<String>,
+        /// Analyze stage-0 index blobs rather than unstaged worktree content.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        staged: bool,
         #[arg(long)]
         files: Vec<String>,
         #[arg(long)]
@@ -683,17 +686,20 @@ pub enum DependenciesCommand {
         #[arg(long)]
         repo: PathBuf,
         /// Analyze this commit instead of HEAD.
-        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace", "staged"])]
         commit: Option<String>,
         /// Analyze this branch instead of HEAD.
-        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace", "staged"])]
         branch: Option<String>,
         /// Analyze non-atomic tracked and untracked worktree source bytes.
-        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        #[arg(long, conflicts_with_all=["commit","branch","workspace","staged"])]
         worktree: bool,
         /// Analyze an identified RIT-managed worktree.
         #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
         workspace: Option<String>,
+        /// Analyze stage-0 index blobs rather than unstaged worktree content.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        staged: bool,
         #[arg(long)]
         json: bool,
     },
@@ -702,17 +708,20 @@ pub enum DependenciesCommand {
         #[arg(long)]
         repo: PathBuf,
         /// Analyze this commit instead of HEAD.
-        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["branch", "worktree", "workspace", "staged"])]
         commit: Option<String>,
         /// Analyze this branch instead of HEAD.
-        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace"])]
+        #[arg(long, conflicts_with_all = ["commit", "worktree", "workspace", "staged"])]
         branch: Option<String>,
         /// Analyze non-atomic tracked and untracked worktree source bytes.
-        #[arg(long, conflicts_with_all=["commit","branch","workspace"])]
+        #[arg(long, conflicts_with_all=["commit","branch","workspace","staged"])]
         worktree: bool,
         /// Analyze an identified RIT-managed worktree.
         #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
         workspace: Option<String>,
+        /// Analyze stage-0 index blobs rather than unstaged worktree content.
+        #[arg(long, conflicts_with_all=["commit","branch","worktree"])]
+        staged: bool,
         #[arg(long)]
         json: bool,
     },
