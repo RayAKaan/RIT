@@ -140,3 +140,65 @@ fn git_snapshot_transitions_use_real_index_head_and_lock_evidence() {
             .any(|t| t.kind == "index_status_changed")
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn restart_discards_old_full_queue_and_explicitly_reports_history_loss() {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        process::Command,
+        time::{Duration, Instant},
+    };
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let s = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .status()
+            .unwrap();
+        assert!(s.success())
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("a"), "base").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let provider = rit_git::Git::discover(None).unwrap();
+    let work = d.path().join("work");
+    let manifest = rit_application::WorkspaceService::new(provider.clone())
+        .create(&repo, &work, "watch", "HEAD")
+        .unwrap();
+    let mut watcher = rit_application::watcher::ActivityWatcher::start(provider, &repo, 1).unwrap();
+    for i in 0..5 {
+        std::fs::write(work.join(format!("old-{i}")), "old").unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    watcher.restart().unwrap();
+    std::fs::write(work.join("fresh"), "new").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut saw_fresh = false;
+    let mut saw_loss = false;
+    while Instant::now() < deadline {
+        let b = watcher.poll(Duration::from_millis(200));
+        saw_loss |= b.overflowed;
+        saw_fresh |= b.events.iter().any(|e| {
+            e.path == "fresh" && e.workspace_id.as_deref() == Some(manifest.id.to_string().as_str())
+        });
+        if saw_loss && saw_fresh {
+            break;
+        }
+    }
+    assert!(saw_loss, "restart must disclose the observation gap");
+    assert!(
+        saw_fresh,
+        "stale queued events must not occupy the new generation"
+    );
+}

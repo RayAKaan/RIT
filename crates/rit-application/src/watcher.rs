@@ -70,7 +70,7 @@ pub struct ActivityWatcher {
     git: Git,
     repo: PathBuf,
     watcher: RecommendedWatcher,
-    tx: SyncSender<Signal>,
+    capacity: usize,
     rx: Receiver<Signal>,
     overflow: Arc<AtomicBool>,
     roots: BTreeMap<PathBuf, Option<String>>,
@@ -104,7 +104,7 @@ impl ActivityWatcher {
             git,
             repo,
             watcher,
-            tx,
+            capacity,
             rx,
             overflow,
             roots: BTreeMap::new(),
@@ -157,7 +157,15 @@ impl ActivityWatcher {
     }
     /// Restart the watcher and re-register actual worktrees; missed events cannot be reconstructed.
     pub fn restart(&mut self) -> Result<(), String> {
-        self.watcher = make_watcher(self.tx.clone(), self.overflow.clone())?;
+        // A previous generation may have filled the bounded channel. Reusing it can
+        // drop the first new notification even after native watches are reinstalled.
+        // The old generation is intentionally discarded and its loss is explicit.
+        let (tx, rx) = mpsc::sync_channel(self.capacity);
+        let overflow = Arc::new(AtomicBool::new(true));
+        let watcher = make_watcher(tx, overflow.clone())?;
+        self.watcher = watcher;
+        self.rx = rx;
+        self.overflow = overflow;
         self.roots.clear();
         self.recent.clear();
         self.reconcile_watches()
