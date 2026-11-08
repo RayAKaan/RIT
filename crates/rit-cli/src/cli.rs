@@ -24,6 +24,9 @@ pub struct Cli {
     /// Git executable path or name; overrides RIT_GIT_EXECUTABLE.
     #[arg(long, global = true, value_name = "PATH")]
     pub git_executable: Option<PathBuf>,
+    /// Credential file reserved for future authenticated commands; never pass a token.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub credential_file: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -58,6 +61,28 @@ pub enum Command {
     Repository {
         #[command(subcommand)]
         command: RepositoryCommand,
+    },
+    /// Identity operations (currently unavailable).
+    Identity {
+        #[command(subcommand)]
+        command: IdentityCommand,
+    },
+    /// Show the currently authenticated principal (currently unavailable).
+    Whoami,
+    /// Permission operations (currently unavailable).
+    Permission {
+        #[command(subcommand)]
+        command: PermissionCommand,
+    },
+    /// Show security policy (currently unavailable).
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
+    /// Audit operations (currently unavailable).
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommand,
     },
     /// Inspect an existing Git repository without registering it.
     Inspect {
@@ -123,4 +148,63 @@ pub enum StorageCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IdentityCommand {
+    /// Explicit owner bootstrap; disabled.
+    Bootstrap,
+    /// Create a human principal; disabled.
+    CreateHuman { name: String },
+    /// Create an agent principal; disabled.
+    CreateAgent { name: String },
+    /// List principals; disabled.
+    List,
+    /// Inspect a principal; disabled.
+    Info { id: String },
+    /// Suspend a principal; disabled.
+    Suspend { id: String },
+    /// Reactivate a principal; disabled.
+    Reactivate { id: String },
+    /// Revoke a principal; disabled.
+    Revoke { id: String },
+    /// Credential lifecycle; disabled.
+    Credential {
+        #[command(subcommand)]
+        command: CredentialCommand,
+    },
+}
+#[derive(Debug, Subcommand)]
+pub enum CredentialCommand {
+    /// Issue a credential into a secure file; disabled.
+    Issue { id: String },
+    /// Rotate a credential; disabled.
+    Rotate { id: String },
+    /// Revoke a credential; disabled.
+    Revoke { id: String },
+}
+#[derive(Debug, Subcommand)]
+pub enum PermissionCommand {
+    /// List role definitions; disabled pending authenticated access.
+    Roles,
+    /// Grant a role; disabled.
+    Grant { principal: String, role: String },
+    /// Revoke a role; disabled.
+    Revoke { principal: String, role: String },
+    /// List assignments; disabled.
+    List,
+    /// Check a capability; disabled.
+    Check { capability: String },
+}
+#[derive(Debug, Subcommand)]
+pub enum PolicyCommand {
+    /// Show policy; disabled.
+    Show,
+}
+#[derive(Debug, Subcommand)]
+pub enum AuditCommand {
+    /// List events; disabled.
+    List,
+    /// Verify audit chain; disabled.
+    Verify,
 }

@@ -135,3 +135,27 @@ fn invalid_overrides_usage_and_redaction() {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
 }
+
+#[test]
+fn security_scaffolding_fails_closed_without_touching_storage() {
+    let d = tempfile::tempdir().unwrap();
+    let data = d.path().join("data");
+    for args in [
+        &["identity", "bootstrap"][..],
+        &["whoami"],
+        &["permission", "roles"],
+        &["audit", "verify"],
+        &["identity", "credential", "issue", "test"],
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .arg("--data-dir")
+            .arg(&data)
+            .args(args)
+            .env("XDG_CONFIG_HOME", d.path().join("config"))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(4));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("secure registry storage"));
+        assert!(!data.exists());
+    }
+}

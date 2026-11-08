@@ -8,4 +8,6 @@ pub mod config;
 pub mod error;
 /// Repository identity, inspection, and status domain types.
 pub mod repository;
+/// Pure identity, policy and audit models; not an authentication implementation.
+pub mod security;
 pub mod version;

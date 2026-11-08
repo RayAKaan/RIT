@@ -90,3 +90,7 @@ Local Linux only. macOS and Windows were not tested. CI matrix runs were not obs
 - [ ] Obtain remote authentication, push branches in order, open PRs and verify actual Linux/macOS/Windows CI before any authorized merge.
 
 Local fixes are partial, not a substitute for the unfinished critical gate. No completion is claimed.
+
+## Structural continuation authorized after the stop report
+
+The owner later authorized safe architecture scaffolding while explicitly deferring—not accepting—the Phase 2.1 gate. Current additions: typed principal IDs, lifecycle, pure default-deny role/scope evaluation, deterministic SHA-256 audit-chain functions, and provider interfaces; CLI identity/permission/policy/audit commands fail closed. None of these authenticates a caller, issues/stores credentials, persists security state or protects the existing Phase 2 repository services. The `ActorContext` has no public constructor; a reviewed provider design is still required. Hash-chain verification cannot detect a rewritten whole chain or truncated suffix without an independently protected anchor. Full identity, principal and credential lifecycle, escalation prevention, audit atomicity and migration remain blocked by `RIT-SEC-001` through `RIT-SEC-010`. Phase 3 is **scaffolding, not complete and not security-verified**.

@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "blockers": [
+    {
+      "id": "RIT-SEC-001",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Hot journal recovery",
+      "evidence": "Real SIGKILL hot-journal test fails RecoveryBlocked",
+      "root_cause": "Read-only SQLite preflight cannot recover",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Design independently bound writable recovery; keep journal intact",
+      "acceptance_criteria": "Hot-journal test passes including rollback, integrity, FK, new write and restart",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/tests/crash_recovery.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-002",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Database substitution and file identity",
+      "evidence": "refuses_replaced_marked_database_even_if_schema_and_application_id_match fails; ext4 reused device/inode",
+      "root_cause": "Marker and schema do not establish durable exact file identity",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Prove durable identity without SQLite lock/alias violations",
+      "acceptance_criteria": "Substitution, reuse, crash and race tests pass on supported filesystems",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/tests/registry.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-003",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Protected manifest/state machine",
+      "evidence": "docs/RIT_DECISIONS.md describes only an unapproved proposal",
+      "root_cause": "No durable reservation, file binding or crash state protocol",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Design and implement durable protected binding and recovery with independent review",
+      "acceptance_criteria": "Every crash window fails closed or recovers safely",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/RIT_DECISIONS.md"
+      ]
+    },
+    {
+      "id": "RIT-SEC-004",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "macOS storage backend",
+      "evidence": "Non-Linux storage fails closed",
+      "root_cause": "No ACL-aware ancestry and file identity backend",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Implement macOS directory, ACL, file identity and sidecar protection",
+      "acceptance_criteria": "Native macOS adversarial, recovery and regression tests pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-005",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Windows storage backend",
+      "evidence": "Non-Linux storage fails closed",
+      "root_cause": "No DACL, reparse or file identity backend",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Implement Windows handle-based storage security",
+      "acceptance_criteria": "Native Windows SID/ACL/reparse/recovery tests pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-006",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Legacy adoption",
+      "evidence": "Existing adoption has no durable intent or automatic consistent backup",
+      "root_cause": "Crash-safe identity binding and backup missing",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Implement confirmed intent, SQLite backup API and recovery protocol",
+      "acceptance_criteria": "Fault-injected adoption preserves data and verifies backup",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/lib.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-007",
+      "phase": "2.1",
+      "component": "storage security",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Independent security review",
+      "evidence": "No independent review performed",
+      "root_cause": "Threat-to-control evidence is incomplete",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Commission independent implementation and threat model review",
+      "acceptance_criteria": "All critical/high findings resolved with evidence",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/security/storage-threat-model.md"
+      ]
+    },
+    {
+      "id": "RIT-SEC-008",
+      "phase": "2.1",
+      "component": "Linux storage",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Linux adversarial validation",
+      "evidence": "Current handle/path boundary is experimental",
+      "root_cause": "ACL, mounts and concurrent directory replacement not fully proven",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Review Linux trust model and exercise second UID and races",
+      "acceptance_criteria": "Linux adversarial tests and review pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ]
+    },
+    {
+      "id": "RIT-OPS-001",
+      "phase": "1-12",
+      "component": "delivery",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Remote authentication",
+      "evidence": "Phase 1 dry-run push failed with missing GitHub credentials",
+      "root_cause": "No authorized GitHub credentials",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Publish ordered branches and open PRs without force push",
+      "acceptance_criteria": "Actual PR and CI status verified",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/RIT_STATUS.md"
+      ]
+    },
+    {
+      "id": "RIT-SEC-009",
+      "phase": "3",
+      "component": "identity and authorization",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Production identity and authorization unavailable",
+      "evidence": "Pure policy types exist; no production authenticator or service enforcement",
+      "root_cause": "Storage and authentication security gates incomplete",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "Do not claim release readiness; security-dependent new operations fail closed.",
+      "required_remediation": "Implement authenticated actor, secure credential lifecycle, central enforcement and transactional audit",
+      "acceptance_criteria": "Security negative paths and migration suite pass after storage remediation",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-application/src/contracts.rs"
+      ]
+    },
+    {
+      "id": "RIT-SEC-010",
+      "phase": "2-3",
+      "component": "existing repository commands",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Existing Phase 2 repository operations are unauthenticated",
+      "evidence": "rit-application Repositories and CLI registry operations predate Phase 3",
+      "root_cause": "No production identity/authz enforcement exists",
+      "dependencies": [],
+      "interim_behavior": "Do not claim release readiness; security-dependent new operations fail closed.",
+      "required_remediation": "Integrate common authenticated service boundary without breaking safe Git inspection",
+      "acceptance_criteria": "Every protected route denies unauthenticated or unauthorized calls",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-application/src/lib.rs"
+      ]
+    }
+  ]
+}

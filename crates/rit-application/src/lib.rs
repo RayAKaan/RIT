@@ -1,5 +1,7 @@
 //! Application services coordinating independent Git and registry adapters.
 #![forbid(unsafe_code)]
+/// Security and later-phase provider contracts.
+pub mod contracts;
 use rit_core::repository::{Inspection, Repository, RepositoryId};
 use rit_git::{Git, GitError};
 use rit_storage::{Registry, StorageError};

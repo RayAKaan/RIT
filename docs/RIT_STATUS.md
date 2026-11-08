@@ -11,3 +11,7 @@ No Phase 3 identity or security implementation exists. Native macOS/Windows exec
 ## Current follow-up results
 
 The required real hot-journal test is no longer ignored and fails `RecoveryBlocked`; a required marked-database substitution test also fails because the wrong database is accepted. The ordinary required test command exits 101. A protected-manifest state machine is documented but **not implemented or approved**, and `(device,inode)` reuse was reproduced on local ext4. There are still no macOS/Windows storage backends, safe legacy-adoption backup/intent protocol or independent security review. No Phase 3 branch exists. See §17 of the Phase 2.1 report for exact test evidence, CI changes and the complete blocked checklist.
+
+## Owner-authorized structural continuation
+
+The owner explicitly superseded the prior prohibition on Phase 3+ *scaffolding* while preserving the Phase 2.1 security gate. New persistence-dependent identity, audit, credential and privileged operations must fail closed. This does not mark Phase 2.1 or any later phase accepted. See `RIT_ROADMAP.md` and `handoff/deferred-work.yaml` for live statuses.

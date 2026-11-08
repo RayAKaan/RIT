@@ -103,6 +103,14 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 }
             }
         }
+        Command::Identity { .. }
+        | Command::Whoami
+        | Command::Permission { .. }
+        | Command::Policy { .. }
+        | Command::Audit { .. } => Err((
+            RUNTIME_FAILURE,
+            rit_application::contracts::CapabilityError::StorageUnverified.to_string(),
+        )),
         Command::Inspect { path, json } => {
             let git =
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
