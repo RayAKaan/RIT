@@ -2918,3 +2918,221 @@ fn checkpoint_reports_lfs_pointer_payload_presence_and_hash_without_filters() {
             .all(|p| p["local_status"] == "custom_storage_not_checked")
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn workspace_removal_preview_reports_real_dirty_ignored_lock_and_preserves_everything() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |cwd: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        text(&o.stdout)
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("tracked"), "original\n").unwrap();
+    std::fs::write(repo.join(".gitignore"), "*.secret\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let work = temp.path().join("work");
+    let rp = repo.to_str().unwrap();
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "preview",
+        "--json",
+    ]);
+    let id = w["workspace"]["id"].as_str().unwrap();
+    let preview = || {
+        cli(&[
+            "workspace",
+            "remove",
+            id,
+            "--repo",
+            rp,
+            "--dry-run",
+            "--json",
+        ])
+    };
+    let clean = preview();
+    assert_eq!(clean["preview"]["executable"], false);
+    assert_eq!(
+        clean["preview"]["ignored_paths"].as_array().unwrap().len(),
+        0
+    );
+    std::fs::write(work.join("tracked"), "modified\n").unwrap();
+    std::fs::write(work.join("untracked"), "untracked\n").unwrap();
+    std::fs::write(work.join("private.secret"), "preserve\n").unwrap();
+    cli(&[
+        "workspace",
+        "lock",
+        id,
+        "--repo",
+        rp,
+        "--reason",
+        "active",
+        "--json",
+    ]);
+    let refs = git(&repo, &["show-ref"]);
+    let p = preview();
+    assert_eq!(p["preview"]["executable"], false);
+    assert!(
+        p["preview"]["ignored_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "private.secret")
+    );
+    assert!(
+        p["preview"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("locked"))
+    );
+    assert!(
+        p["preview"]["workspace"]["status"]["changes"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2
+    );
+    assert_eq!(git(&repo, &["show-ref"]), refs);
+    let no = run(&["workspace", "remove", id, "--repo", rp], &[]);
+    assert!(!no.status.success());
+    assert_eq!(
+        std::fs::read_to_string(work.join("private.secret")).unwrap(),
+        "preserve\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("tracked")).unwrap(),
+        "modified\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("untracked")).unwrap(),
+        "untracked\n"
+    );
+    assert_eq!(git(&repo, &["show-ref"]), refs);
+    let missing = run(
+        &[
+            "workspace",
+            "remove",
+            "00000000-0000-4000-8000-000000000000",
+            "--repo",
+            rp,
+            "--dry-run",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!missing.status.success());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn concurrent_workspace_path_claim_preserves_unique_winner_and_operation_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("a"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let dest = temp.path().join("same");
+    let mut children = Vec::new();
+    for name in ["one", "two"] {
+        children.push(
+            std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+                .args([
+                    "workspace",
+                    "create",
+                    "--repo",
+                    repo.to_str().unwrap(),
+                    "--path",
+                    dest.to_str().unwrap(),
+                    "--name",
+                    name,
+                    "--json",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    let outputs = children
+        .into_iter()
+        .map(|c| c.wait_with_output().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs.iter().filter(|o| o.status.success()).count(),
+        1,
+        "{:?}",
+        outputs.iter().map(|o| text(&o.stderr)).collect::<Vec<_>>()
+    );
+    assert_eq!(std::fs::read_to_string(dest.join("a")).unwrap(), "base\n");
+    let winner = outputs.iter().find(|o| o.status.success()).unwrap();
+    let w: serde_json::Value = serde_json::from_slice(&winner.stdout).unwrap();
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    let inspect = run(
+        &[
+            "workspace",
+            "inspect",
+            wid,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(inspect.status.success());
+    let ops = run(
+        &[
+            "workspace",
+            "operations",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(ops.status.success(), "{}", text(&ops.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&ops.stdout).unwrap();
+    assert!(!v["operations"].as_array().unwrap().is_empty());
+    assert!(dest.join(".git").exists());
+}

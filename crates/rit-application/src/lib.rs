@@ -432,6 +432,14 @@ impl WorkspaceService {
     pub fn repair_operations(&self, repo: &Path) -> Result<usize, ApplicationError> {
         Ok(self.git.workspace_repair_operations(repo)?)
     }
+    /// Preview removal evidence without authorizing or performing cleanup.
+    pub fn removal_preview(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_core::workspace::WorkspaceRemovalPreview, ApplicationError> {
+        Ok(self.git.workspace_removal_preview(repo, id)?)
+    }
     /// Lock or unlock the matched Git worktree.
     pub fn lock(
         &self,

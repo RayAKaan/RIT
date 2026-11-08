@@ -430,11 +430,16 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Removal is disabled until non-destructive handling is verified.
+    /// Preview removal evidence; actual removal remains disabled.
     Remove {
         id: String,
         #[arg(long)]
         repo: PathBuf,
+        /// Inspect without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 #[derive(Debug, Subcommand)]

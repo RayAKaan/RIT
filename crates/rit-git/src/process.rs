@@ -1600,6 +1600,91 @@ impl Git {
             unclaimed_worktrees,
         })
     }
+    /// Inspect removal-related evidence without deleting files, refs, or metadata.
+    pub fn workspace_removal_preview(
+        &self,
+        repo: &Path,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_core::workspace::WorkspaceRemovalPreview, GitError> {
+        let w = self
+            .workspace_reconcile(repo)?
+            .workspaces
+            .into_iter()
+            .find(|w| w.manifest.id == id)
+            .ok_or(GitError::Parse("workspace not found"))?;
+        let mut blockers = vec![
+            "removal disabled: race-safe preservation and durable cleanup are not verified"
+                .to_string(),
+        ];
+        if w.observation != "present" {
+            blockers.push(format!("workspace observation: {}", w.observation));
+        }
+        match &w.status {
+            Some(s) if !s.changes.is_empty() => blockers.push(format!(
+                "{} staged, unstaged or untracked status entries",
+                s.changes.len()
+            )),
+            None => blockers.push("workspace status unavailable".into()),
+            _ => (),
+        }
+        if w.worktree.as_ref().is_some_and(|v| v.locked) {
+            blockers.push("Git worktree is locked".into());
+        }
+        let mut ignored_paths = None;
+        if w.observation == "present" {
+            let args = [
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            match self.run(
+                Some(Path::new(&w.manifest.path)),
+                &args,
+                "workspace ignored inventory",
+            ) {
+                Ok(out) => {
+                    if !out.is_empty() && !out.ends_with(&[0]) {
+                        return Err(GitError::Parse("ignored paths terminator"));
+                    }
+                    let mut paths = Vec::new();
+                    for p in out.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                        let name = std::str::from_utf8(p).map_err(|_| GitError::NonUnicode)?;
+                        paths.push(name.to_owned());
+                        if paths.len() > 5000 {
+                            return Err(GitError::OutputLimit);
+                        }
+                    }
+                    if !paths.is_empty() {
+                        blockers.push(format!("{} ignored file or directory entries", paths.len()));
+                    }
+                    ignored_paths = Some(paths);
+                }
+                Err(e) => blockers.push(format!("ignored inventory unavailable: {e}")),
+            }
+        }
+        let submissions = self
+            .submission_list(repo)?
+            .into_iter()
+            .filter(|s| s.workspace == id && s.lifecycle != "cancelled")
+            .map(|s| s.id.to_string())
+            .collect::<Vec<_>>();
+        if !submissions.is_empty() {
+            blockers.push(format!("{} active submissions", submissions.len()));
+        }
+        let checkpoints = self
+            .content_checkpoint_list(repo)?
+            .into_iter()
+            .filter(|c| c.manifest.workspace == id)
+            .map(|c| c.manifest.id.to_string())
+            .collect();
+        Ok(rit_core::workspace::WorkspaceRemovalPreview{workspace:w,ignored_paths,active_submissions:submissions,checkpoint_ids:checkpoints,blockers,executable:false,limitations:vec!["point-in-time evidence can become stale immediately".into(),"Git refs and manifests do not authenticate ownership or authorize removal".into(),"ignored inventory may collapse directories; uncommitted and nested content are not preserved by a preview".into(),"no paths, worktrees, branches or metadata are removed".into()]})
+    }
     /// Inspect durable workspace operation intents against live Git metadata without deleting data.
     pub fn workspace_operations(
         &self,

@@ -203,3 +203,22 @@ pub struct WorkspaceOperationObservation {
     /// The operation can be marked completed without modifying any worktree/branch.
     pub metadata_repair_possible: bool,
 }
+
+/// Read-only, point-in-time removal assessment; never authorizes deletion.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkspaceRemovalPreview {
+    /// Reconciled workspace and current status, if available.
+    pub workspace: ManagedWorkspaceObservation,
+    /// Ignored paths reported by Git, or `None` if inventory was unavailable.
+    pub ignored_paths: Option<Vec<String>>,
+    /// Active cooperative submissions associated with this workspace.
+    pub active_submissions: Vec<String>,
+    /// Retained content checkpoint IDs, which do not imply completeness.
+    pub checkpoint_ids: Vec<String>,
+    /// Reasons removal cannot proceed.
+    pub blockers: Vec<String>,
+    /// Always false: no destruction is authorized by this observation.
+    pub executable: bool,
+    /// Explicit trust, concurrency, and completeness limitations.
+    pub limitations: Vec<String>,
+}

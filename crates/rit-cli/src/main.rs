@@ -113,15 +113,120 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             let service = rit_application::WorkspaceService::new(
                 rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
             );
-            let value=match command {
-                WorkspaceCommand::Create{repo,path,name,base,json}=>{let w=service.create(&repo,&path,&name,&base).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"workspace":w,"security":"coordination only; not authenticated or isolated"}),json)},
-                WorkspaceCommand::List{repo,json}=>{let w=service.reconcile(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"reconciliation":w}),json)},
-                WorkspaceCommand::Reconcile{repo,repair,json}=>{let repaired=if repair {service.repair_operations(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?}else{0};let w=service.reconcile(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;let operations=service.operations(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"reconciliation":w,"operations":operations,"metadata_repairs":repaired}),json)},
-                WorkspaceCommand::Operations{repo,json}=>{let operations=service.operations(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"operations":operations,"authenticated":false}),json)},
-                WorkspaceCommand::Inspect{id,repo,json}|WorkspaceCommand::Status{id,repo,json}=>{let id=id.parse().map_err(|_|(RUNTIME_FAILURE,"invalid workspace ID".into()))?;let state=service.reconcile(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;let w=state.workspaces.into_iter().find(|w|w.manifest.id==id).ok_or((RUNTIME_FAILURE,"workspace not found".into()))?;(serde_json::json!({"schema_version":1,"workspace":w}),json)},
-                WorkspaceCommand::Lock{id,repo,reason,json}=>{let id=id.parse().map_err(|_|(RUNTIME_FAILURE,"invalid workspace ID".into()))?;service.lock(&repo,id,Some(&reason)).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"workspace_id":id,"locked":true}),json)},
-                WorkspaceCommand::Unlock{id,repo,json}=>{let id=id.parse().map_err(|_|(RUNTIME_FAILURE,"invalid workspace ID".into()))?;service.lock(&repo,id,None).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?;(serde_json::json!({"schema_version":1,"workspace_id":id,"locked":false}),json)},
-                WorkspaceCommand::Remove{..}=>return Err((RUNTIME_FAILURE,"operation unavailable: Git removal may delete ignored files; non-destructive cleanup not verified".into())),
+            let value = match command {
+                WorkspaceCommand::Create {
+                    repo,
+                    path,
+                    name,
+                    base,
+                    json,
+                } => {
+                    let w = service
+                        .create(&repo, &path, &name, &base)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"workspace":w,"security":"coordination only; not authenticated or isolated"}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::List { repo, json } => {
+                    let w = service
+                        .reconcile(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"reconciliation":w}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::Reconcile { repo, repair, json } => {
+                    let repaired = if repair {
+                        service
+                            .repair_operations(&repo)
+                            .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
+                    } else {
+                        0
+                    };
+                    let w = service
+                        .reconcile(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    let operations = service
+                        .operations(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"reconciliation":w,"operations":operations,"metadata_repairs":repaired}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::Operations { repo, json } => {
+                    let operations = service
+                        .operations(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"operations":operations,"authenticated":false}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::Inspect { id, repo, json }
+                | WorkspaceCommand::Status { id, repo, json } => {
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                    let state = service
+                        .reconcile(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    let w = state
+                        .workspaces
+                        .into_iter()
+                        .find(|w| w.manifest.id == id)
+                        .ok_or((RUNTIME_FAILURE, "workspace not found".into()))?;
+                    (serde_json::json!({"schema_version":1,"workspace":w}), json)
+                }
+                WorkspaceCommand::Lock {
+                    id,
+                    repo,
+                    reason,
+                    json,
+                } => {
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                    service
+                        .lock(&repo, id, Some(&reason))
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"workspace_id":id,"locked":true}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::Unlock { id, repo, json } => {
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                    service
+                        .lock(&repo, id, None)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"workspace_id":id,"locked":false}),
+                        json,
+                    )
+                }
+                WorkspaceCommand::Remove {
+                    id,
+                    repo,
+                    dry_run,
+                    json,
+                } => {
+                    if !dry_run {
+                        return Err((RUNTIME_FAILURE,"operation unavailable: Git removal may delete ignored files; non-destructive cleanup not verified; use --dry-run for evidence".into()));
+                    }
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+                    let plan = service
+                        .removal_preview(&repo, id)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (serde_json::json!({"schema_version":1,"preview":plan}), json)
+                }
             };
             output::value(&value.0, value.1).map_err(|e| (RUNTIME_FAILURE, e))
         }
