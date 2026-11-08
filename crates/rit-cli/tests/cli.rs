@@ -143,9 +143,18 @@ fn invalid_overrides_usage_and_redaction() {
 fn security_scaffolding_fails_closed_without_touching_storage() {
     let d = tempfile::tempdir().unwrap();
     let data = d.path().join("data");
+    // The legacy positional workspace scaffold is no longer a valid invocation;
+    // new creation requires explicit --repo, --path and --name and is separately tested.
+    let legacy = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .arg("--data-dir")
+        .arg(&data)
+        .args(["workspace", "create", "repo"])
+        .output()
+        .unwrap();
+    assert_eq!(legacy.status.code(), Some(2));
+    assert!(!data.exists());
     for args in [
         &["identity", "bootstrap"][..],
-        &["workspace", "create", "repo"],
         &["agent", "run", "workspace"],
         &["checkpoint", "restore", "checkpoint"],
         &["submission", "publish", "submission"],
@@ -1830,4 +1839,125 @@ fn conflicting_submission_reports_git_stages_and_creates_no_candidate() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn checkpoint_preserves_unmerged_index_deletion_and_refuses_large_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("file.txt"), "base\n").unwrap();
+    std::fs::write(repo.join("delete.txt"), "to delete\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("work");
+    let wp = work.to_str().unwrap();
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        wp,
+        "--name",
+        "conflicted",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("file.txt"), "source\n").unwrap();
+    git(&work, &["add", "file.txt"]);
+    git(&work, &["commit", "-qm", "source"]);
+    std::fs::write(repo.join("file.txt"), "target\n").unwrap();
+    git(&repo, &["add", "file.txt"]);
+    git(&repo, &["commit", "-qm", "target"]);
+    let merge = std::process::Command::new("git")
+        .current_dir(&work)
+        .args([
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.invalid",
+            "merge",
+            "--no-commit",
+            "main",
+        ])
+        .output()
+        .unwrap();
+    assert!(!merge.status.success());
+    std::fs::remove_file(work.join("delete.txt")).unwrap();
+    let index = git(&work, &["rev-parse", "--git-path", "index"]);
+    let before = std::fs::read(&index).unwrap();
+    let result = cli(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        rp,
+        "--workspace",
+        wid,
+        "--json",
+    ]);
+    let c = &result["checkpoint"];
+    let entries = c["manifest"]["staged"].as_array().unwrap();
+    for stage in [1, 2, 3] {
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["path"] == "file.txt" && e["stage"] == stage)
+        );
+    }
+    assert!(
+        c["manifest"]["worktree"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["path"] == "delete.txt" && e["kind"] == "deleted")
+    );
+    let id = c["manifest"]["id"].as_str().unwrap();
+    cli(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    assert_eq!(std::fs::read(&index).unwrap(), before);
+    std::fs::write(work.join("huge.bin"), vec![42; 1_048_577]).unwrap();
+    let fail = run(
+        &[
+            "checkpoint",
+            "create",
+            "--repo",
+            rp,
+            "--workspace",
+            wid,
+            "--include-untracked",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!fail.status.success());
+    assert_eq!(
+        std::fs::metadata(work.join("huge.bin")).unwrap().len(),
+        1_048_577
+    );
+    assert_eq!(std::fs::read(&index).unwrap(), before);
+    let list = cli(&["checkpoint", "list", "--repo", rp, "--json"]);
+    assert_eq!(list["content_checkpoints"].as_array().unwrap().len(), 1);
 }

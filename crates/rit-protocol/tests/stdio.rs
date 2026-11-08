@@ -224,18 +224,65 @@ fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
         .workspace_create(&repo, &d.path().join("work"), "source", "HEAD")
         .unwrap();
     let work = std::path::Path::new(&workspace.path);
+    let mut watcher =
+        rit_application::watcher::ActivityWatcher::start(provider.clone(), &repo, 128).unwrap();
     fs::write(work.join("feature.py"), "import app\n").unwrap();
-    let checkpoint = provider
-        .content_checkpoint_create(&repo, workspace.id, true, &[])
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut seen = false;
+    while std::time::Instant::now() < deadline {
+        let batch = watcher.poll(std::time::Duration::from_millis(200));
+        if batch.events.iter().any(|e| {
+            e.path == "feature.py" && e.workspace_id.as_deref() == Some(&workspace.id.to_string())
+        }) {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen, "native workspace event absent");
+    let graph = rit_application::GitReadService::new(provider.clone())
+        .dependencies_workspace(&repo, workspace.id)
+        .unwrap();
+    assert!(graph.files.iter().any(|p| p == "feature.py"));
+    let checkpoints = rit_application::GitCheckpointService::new(provider.clone());
+    let checkpoint = checkpoints
+        .create_content(&repo, workspace.id, true, &[])
+        .unwrap();
+    checkpoints
+        .verify_content(&repo, checkpoint.manifest.id)
         .unwrap();
     git(work, &["add", "."]);
     git(work, &["commit", "-qm", "feature"]);
-    let submission = provider
-        .submission_create(&repo, workspace.id, "refs/heads/main")
+    let submissions = rit_application::submissions::SubmissionService::new(provider.clone());
+    let receipt = submissions
+        .create(&repo, workspace.id, "refs/heads/main")
         .unwrap();
-    let candidate = provider
-        .candidate_create(&repo, submission.id, &d.path().join("candidate"))
+    assert!(receipt.dependency_analysis.is_some());
+    assert!(
+        receipt
+            .related_checkpoints
+            .as_ref()
+            .unwrap()
+            .contains(&checkpoint.manifest.id.to_string())
+    );
+    let submission = receipt.submission;
+    let outcome = submissions
+        .candidate(&repo, submission.id, &d.path().join("candidate"))
         .unwrap();
+    let candidate = match outcome {
+        rit_application::submissions::CandidateResult::Created {
+            candidate,
+            conflict_report,
+            dependency_analysis,
+            object_check,
+            ..
+        } => {
+            assert!(!conflict_report.simulation.has_conflicts);
+            assert!(dependency_analysis.is_some());
+            assert!(object_check.starts_with("passed"));
+            candidate
+        }
+        _ => panic!("clean candidate not created"),
+    };
     let mut child = Command::new(env!("CARGO_BIN_EXE_rit-protocol"))
         .arg("--repo")
         .arg(&repo)
