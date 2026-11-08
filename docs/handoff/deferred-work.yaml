@@ -268,7 +268,8 @@
       "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "workspace/isolation",
-      "required_implementation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits"
+      "required_implementation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits",
+      "v5_update": "V5 CAS-backed provisioning intent and metadata-only repair exist; removal/move stay disabled, no worktree sandbox."
     },
     {
       "id": "RIT-P05-001",
@@ -292,7 +293,8 @@
       "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "activity",
-      "required_implementation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation"
+      "required_implementation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation",
+      "v5_update": "V5 emits actual bounded endpoint HEAD/index/lock transitions and explicit watcher loss; durable complete event history remains absent."
     },
     {
       "id": "RIT-P06-001",
@@ -316,7 +318,8 @@
       "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "checkpoint",
-      "required_implementation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies"
+      "required_implementation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies",
+      "v5_update": "V5 subset new-worktree recovery and raw-index verification exist; incomplete non-atomic snapshots, fixed limits, unretained LFS/submodules, no resume or in-place restore remain."
     },
     {
       "id": "RIT-P07-001",
@@ -340,7 +343,8 @@
       "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "integration",
-      "required_implementation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation"
+      "required_implementation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation",
+      "v5_update": "V5 candidate step recording, cancellation and reconciliation exist; no automatic recovery/cleanup, protected review or publication."
     },
     {
       "id": "RIT-P08-001",
@@ -412,7 +416,8 @@
       "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
       "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
       "responsible_future_workstream": "protocol",
-      "required_implementation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs"
+      "required_implementation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs",
+      "v5_update": "V5 has thirteen opt-in scoped read-only MCP views; scope is not authenticated authorization."
     },
     {
       "id": "RIT-P11-001",
@@ -680,7 +685,8 @@
       "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
       "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
       "responsible_future_workstream": "cross-phase safety",
-      "required_implementation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance."
+      "required_implementation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance.",
+      "v5_update": "V5 records candidate provisioning steps and rediscovers SIGKILL interruption; no automatic recovery or cleanup, and no cross-ref atomicity."
     }
   ]
 }

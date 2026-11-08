@@ -1,3 +1,5 @@
+> **V5 update:** See [V5_FINAL_REPORT.md](V5_FINAL_REPORT.md) and [V5_IMPLEMENTATION_AUDIT.md](V5_IMPLEMENTATION_AUDIT.md) for current capabilities, actual 30-step diagnostic results, validation and open blockers. Earlier descriptions below are historical, not a superseding V5 status.
+
 > **V4 update:** Current capabilities, validation and limitations are in [V4_FINAL_REPORT.md](V4_FINAL_REPORT.md). Older statements below are historical; stable blocker IDs remain open.
 
 > **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
@@ -37,3 +39,7 @@ Canonical structured records: `deferred-work.yaml`. Security gate is NOT PASSED;
 | RIT-V4-001 | high | Git safety | Child-process restrictions and portability | Narrow Linux x86-64 mechanism only; independent review and native portability missing. |
 | RIT-V4-002 | high | coordination security | Unauthenticated Git metadata and races | Git refs/manifests are mutable and same-user filesystem races remain. |
 | RIT-V4-003 | high | candidate recovery | Interrupted candidate recovery | Partial provisioning can leave metadata/objects/directories; no destructive cleanup. |
+
+## V5 open blocker update
+
+Stable IDs remain open. RIT-P04-001 now includes CAS provisioning intents and metadata-only repair, but clean and dirty removal/move remain disabled. RIT-P05-001 has endpoint Git transitions and explicit overflow/loss warnings, but no durable complete history. RIT-P06-001 has protected new-worktree *captured-subset* recovery and bounded ephemeral LFS evidence; snapshots remain incomplete/non-atomic, fixed limits remain, submodule/LFS payloads are not retained, no general in-place restore or automatic resume. RIT-P07-001 and RIT-V4-003 have candidate progress and safe discovery, but no automatic recovery, cleanup, production review or publication. RIT-P10-001 has thirteen scoped read-only views, not authentication. RIT-V4-001/002 and RIT-SEC-001 through 010 remain open; Phase 2.1 gate remains active. Full details and evidence: V5 final report and audit.

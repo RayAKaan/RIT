@@ -1,3 +1,5 @@
+> **V5 update:** See [V5_FINAL_REPORT.md](V5_FINAL_REPORT.md) and [V5_IMPLEMENTATION_AUDIT.md](V5_IMPLEMENTATION_AUDIT.md) for current capabilities, actual 30-step diagnostic results, validation and open blockers. Earlier descriptions below are historical, not a superseding V5 status.
+
 > **V4 update:** Current capabilities, validation and limitations are in [V4_FINAL_REPORT.md](V4_FINAL_REPORT.md). Older statements below are historical; stable blocker IDs remain open.
 
 > **V3 status:** This document includes historical V2 statements; current capabilities, gate failures, validation and limitations are in [FINAL_REPORT.md](FINAL_REPORT.md). Stable blockers are updated in `deferred-work.yaml`.
