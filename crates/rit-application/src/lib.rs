@@ -343,6 +343,31 @@ impl GitCheckpointService {
     ) -> Result<rit_core::checkpoint::ContentCheckpointRecord, ApplicationError> {
         Ok(self.git.content_checkpoint_verify(repo, id)?)
     }
+    /// Preview recovery of captured content into a new detached worktree.
+    pub fn restore_plan(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+    ) -> Result<rit_core::checkpoint::RestorePlan, ApplicationError> {
+        Ok(self.git.checkpoint_restore_plan(repo, id, dest)?)
+    }
+    /// Recover captured content into a new detached worktree without overwriting paths.
+    pub fn restore_new(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+    ) -> Result<rit_core::checkpoint::RestoreObservation, ApplicationError> {
+        Ok(self.git.checkpoint_restore_new(repo, id, dest)?)
+    }
+    /// Reconcile persistent restore intents with Git worktree inventory.
+    pub fn restores(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::RestoreObservation>, ApplicationError> {
+        Ok(self.git.checkpoint_restore_list(repo)?)
+    }
     /// List commit-only checkpoint references.
     pub fn list(
         &self,

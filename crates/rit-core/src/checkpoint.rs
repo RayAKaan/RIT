@@ -151,6 +151,9 @@ pub struct CapturedWorktreeEntry {
     /// Git blob holding exact raw file bytes or link target; absent for deletion.
     pub blob: Option<crate::git_object::ObjectId>,
 }
+fn unknown_consistency() -> String {
+    "not_recorded".into()
+}
 /// Unauthenticated Git-object coordination data, not a restore authorization.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -169,6 +172,9 @@ pub struct ContentCheckpoint {
     pub staged: Vec<CapturedIndexEntry>,
     /// Exact raw worktree content for observed paths.
     pub worktree: Vec<CapturedWorktreeEntry>,
+    /// Observation consistency, not an atomic snapshot or authenticated claim.
+    #[serde(default = "unknown_consistency")]
+    pub consistency: String,
     /// Explicit categories and state that cannot be guaranteed complete.
     pub limitations: Vec<String>,
     /// Always false: capture spans time and cannot guarantee complete atomic coverage.
@@ -185,4 +191,84 @@ pub struct ContentCheckpointRecord {
     pub object: crate::git_object::ObjectId,
     /// Content manifest.
     pub manifest: ContentCheckpoint,
+}
+
+/// Opaque restore-operation ID; not an authenticated identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RestoreId(uuid::Uuid);
+impl RestoreId {
+    /// Generate an operation ID.
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+impl Default for RestoreId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl std::fmt::Display for RestoreId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::str::FromStr for RestoreId {
+    type Err = uuid::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        uuid::Uuid::parse_str(s).map(Self)
+    }
+}
+/// A read-only plan for restoring only captured data into a new worktree.
+#[derive(Clone, Debug, Serialize)]
+pub struct RestorePlan {
+    /// Unauthenticated source checkpoint and its declared limitations.
+    pub checkpoint: ContentCheckpointRecord,
+    /// New, currently absent worktree path.
+    pub destination: String,
+    /// Paths for which a regular file or symlink will be created.
+    pub create_paths: Vec<String>,
+    /// Recorded missing tracked paths, intentionally left absent.
+    pub deleted_paths: Vec<String>,
+    /// Explicit limitations; the checkpoint is non-atomic and may omit user content.
+    pub limitations: Vec<String>,
+}
+/// Durable cooperative recovery intent; not authorization or a trusted audit record.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreOperation {
+    /// Schema.
+    pub schema_version: u32,
+    /// Restore operation identity.
+    pub id: RestoreId,
+    /// Checkpoint identity.
+    pub checkpoint: CheckpointId,
+    /// Exact checkpoint commit used; the retained ref pins it.
+    pub checkpoint_object: crate::git_object::ObjectId,
+    /// Base HEAD for the new detached worktree.
+    pub base: crate::git_object::ObjectId,
+    /// Expected new worktree path.
+    pub destination: String,
+    /// Last durably recorded step; actual filesystem can be ahead.
+    pub state: String,
+    /// Successfully written paths at the time of the last CAS update.
+    pub completed_paths: Vec<String>,
+    /// Path currently being attempted, if a crash occurred before it was recorded complete.
+    pub current_path: Option<String>,
+    /// Failure explanation, when record update succeeded.
+    pub failure: Option<String>,
+    /// No automatic overwrite or cleanup is allowed.
+    pub action: String,
+}
+/// Live inventory observation of a restore operation.
+#[derive(Clone, Debug, Serialize)]
+pub struct RestoreObservation {
+    /// Unauthenticated recovery intent.
+    pub operation: RestoreOperation,
+    /// Manifest object identity.
+    pub object: crate::git_object::ObjectId,
+    /// Current Git inventory evidence.
+    pub worktree: Option<crate::git_object::WorktreeRecord>,
+    /// Completed inventory is not a guarantee that files have not subsequently changed.
+    pub observation: String,
 }

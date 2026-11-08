@@ -22,7 +22,7 @@ pub enum GitError {
     #[error("operation unavailable: {0}")]
     Unavailable(&'static str),
     /// Creation was interrupted after a durable provisioning manifest was reserved.
-    #[error("workspace {id} provisioning interrupted; reconcile before retrying")]
+    #[error("operation {id} provisioning interrupted; reconcile before retrying")]
     Provisioning { id: String },
     /// Git executable was unavailable or could not be spawned.
     #[error("cannot start Git executable: {0}")]
@@ -30,6 +30,12 @@ pub enum GitError {
     /// Git version could not be parsed.
     #[error("unrecognized Git version output")]
     Version,
+    /// A selected checkpoint path changed or became unreadable during recheck.
+    #[error("checkpoint path changed or became unreadable during capture: {path}")]
+    CheckpointChanged {
+        /// Workspace-relative path.
+        path: String,
+    },
     /// Older Git is unsupported.
     #[error("Git {0} is unsupported; Git 2.46 or newer and required capabilities are needed")]
     Unsupported(String),
@@ -68,6 +74,9 @@ pub enum GitError {
     #[error("repository or status path is not valid Unicode; this path is not supported")]
     NonUnicode,
 }
+
+type RestoreFiles = Vec<(String, String, bool, Vec<u8>)>;
+type PreparedRestore = (rit_core::checkpoint::RestorePlan, Vec<u8>, RestoreFiles);
 
 /// An executable plus limits for typed Git operations.
 #[derive(Debug, Clone)]
@@ -1836,6 +1845,7 @@ impl Git {
             },
             git_object::ObjectId,
         };
+        use sha2::{Digest, Sha256};
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Err(GitError::Unavailable(
                 "content checkpoints unavailable on this platform",
@@ -1901,7 +1911,7 @@ impl Git {
             }
             if stage != 0 {
                 limitations.push(format!(
-                    "Unmerged index stages for {path}: captured as evidence, restore unavailable"
+                    "Unmerged index stages for {path}: captured; Git merge-operation metadata is not captured"
                 ));
             }
             staged.push(CapturedIndexEntry {
@@ -1941,9 +1951,11 @@ impl Git {
         let mut selected: std::collections::BTreeMap<String, String> =
             tracked.into_iter().map(|p| (p, "tracked".into())).collect();
         if include_untracked {
-            for path in untracked {
-                validate_checkpoint_path(&path)?;
-                selected.entry(path).or_insert_with(|| "untracked".into());
+            for path in &untracked {
+                validate_checkpoint_path(path)?;
+                selected
+                    .entry(path.clone())
+                    .or_insert_with(|| "untracked".into());
             }
         }
         for path in ignored {
@@ -1976,6 +1988,8 @@ impl Git {
         }
         let mut total = 0usize;
         let mut worktree = Vec::new();
+        let mut observed =
+            std::collections::BTreeMap::<String, Option<(String, bool, [u8; 32])>>::new();
         for (path, category) in selected {
             if staged.iter().any(|e| e.path == path && e.mode == "160000") {
                 continue;
@@ -1985,6 +1999,7 @@ impl Git {
                     if category != "tracked" {
                         return Err(GitError::Unavailable("selected file disappeared"));
                     }
+                    observed.insert(path.clone(), None);
                     worktree.push(CapturedWorktreeEntry {
                         path,
                         category,
@@ -2000,6 +2015,8 @@ impl Git {
                     if total > 8_388_608 {
                         return Err(GitError::Unavailable("checkpoint total exceeds 8 MiB"));
                     }
+                    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+                    observed.insert(path.clone(), Some((kind.into(), executable, digest)));
                     let blob = self.checkpoint_hash_blob(root, format, &bytes)?;
                     worktree.push(CapturedWorktreeEntry {
                         path,
@@ -2009,6 +2026,43 @@ impl Git {
                         blob: Some(blob),
                     });
                 }
+            }
+        }
+        // Re-read every selected path after capture; this detects many cross-file races,
+        // but cannot prove atomicity or detect a change that is reversed between reads.
+        for (path, expected) in &observed {
+            let now = read_checkpoint_entry(root, path)
+                .map_err(|_| GitError::CheckpointChanged { path: path.clone() })?
+                .map(|(kind, exec, bytes)| {
+                    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+                    (kind.to_owned(), exec, digest)
+                });
+            if &now != expected {
+                return Err(GitError::CheckpointChanged { path: path.clone() });
+            }
+        }
+        if include_untracked {
+            let now = self.run(
+                Some(root),
+                &[
+                    "ls-files".into(),
+                    "--others".into(),
+                    "--exclude-standard".into(),
+                    "-z".into(),
+                ],
+                "workspace checkpoint untracked recheck",
+            )?;
+            let now = now
+                .split(|b| *b == 0)
+                .filter(|b| !b.is_empty())
+                .map(|b| {
+                    std::str::from_utf8(b)
+                        .map(str::to_owned)
+                        .map_err(|_| GitError::NonUnicode)
+                })
+                .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+            if let Some(path) = untracked.symmetric_difference(&now).next() {
+                return Err(GitError::CheckpointChanged { path: path.clone() });
             }
         }
         let after_index = read_worktree_file(index_path, "index")?
@@ -2030,7 +2084,7 @@ impl Git {
                 .push("Split-index shared-index file is not captured as raw index bytes".into())
         }
         let id = CheckpointId::new();
-        let manifest=ContentCheckpoint{schema_version:1,id,workspace:w.manifest.id,base:base.clone(),index_blob:index_blob.clone(),staged,worktree,limitations,complete:false,scope:"bounded raw worktree and index observation; non-atomic; no authenticated provenance or restore".into()};
+        let manifest=ContentCheckpoint{schema_version:2,id,workspace:w.manifest.id,base:base.clone(),index_blob:index_blob.clone(),staged,worktree,consistency:"observed_quiescence_on_recheck".into(),limitations,complete:false,scope:"bounded raw worktree and index observation; non-atomic; no authenticated provenance; recovery only to a new worktree".into()};
         let staged_entries = manifest
             .staged
             .iter()
@@ -2154,7 +2208,8 @@ impl Git {
             }
             let m: ContentCheckpoint =
                 serde_json::from_slice(&raw).map_err(|_| GitError::Parse("checkpoint manifest"))?;
-            if m.schema_version != 1
+            if !matches!(m.schema_version, 1 | 2)
+                || (m.schema_version == 2 && m.consistency != "observed_quiescence_on_recheck")
                 || m.complete
                 || fields[0] != format!("refs/rit/content-checkpoints/{}", m.id)
                 || m.base.algorithm() != format
@@ -2336,6 +2391,406 @@ impl Git {
             }
         }
         Ok(c)
+    }
+    fn checkpoint_restore_prepare(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+    ) -> Result<PreparedRestore, GitError> {
+        use rit_core::checkpoint::RestorePlan;
+        use std::io::Write;
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "restore unsupported on this platform",
+            ));
+        }
+        let c = self.content_checkpoint_verify(repo, id)?;
+        if c.manifest.staged.iter().any(|e| e.mode == "160000") {
+            return Err(GitError::Unavailable(
+                "submodule checkpoint restoration is not implemented",
+            ));
+        }
+        let target = workspace_target(dest)?;
+        let ins = self.inspect(repo)?;
+        let source = Path::new(
+            ins.worktree
+                .as_deref()
+                .ok_or(GitError::Unavailable("bare repository"))?,
+        );
+        let common = Path::new(&ins.common_git_dir);
+        if target.starts_with(source)
+            || source.starts_with(&target)
+            || target.starts_with(common)
+            || common.starts_with(&target)
+        {
+            return Err(GitError::Parse("restore destination overlaps repository"));
+        }
+        for w in self.worktrees(repo)? {
+            let p = Path::new(&w.path);
+            if target.starts_with(p) || p.starts_with(&target) {
+                return Err(GitError::Parse("restore destination overlaps worktree"));
+            }
+        }
+        let index = self.conflict_blob(repo, &c.manifest.index_blob)?;
+        let mut temp = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
+        temp.write_all(&index).map_err(GitError::Launch)?;
+        temp.flush().map_err(GitError::Launch)?;
+        let env = [("GIT_INDEX_FILE", temp.path().as_os_str().into())];
+        let args = ["rev-parse", "--shared-index-path"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (shared, _) = self.run_internal(
+            Some(repo),
+            &args,
+            "workspace restore shared-index check",
+            &env,
+            false,
+            None,
+        )?;
+        if !shared.iter().all(u8::is_ascii_whitespace) {
+            return Err(GitError::Unavailable(
+                "split-index restoration is unavailable",
+            ));
+        }
+        let args = ["ls-files", "--stage", "-z"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let (actual, _) = self.run_internal(
+            Some(repo),
+            &args,
+            "workspace restore index check",
+            &env,
+            false,
+            None,
+        )?;
+        let mut expected = Vec::new();
+        for e in &c.manifest.staged {
+            expected.extend_from_slice(
+                format!("{} {} {}\t{}\0", e.mode, e.object.as_hex(), e.stage, e.path).as_bytes(),
+            );
+        }
+        if actual != expected {
+            return Err(GitError::Parse(
+                "captured index entries disagree with raw index",
+            ));
+        }
+        let mut files = Vec::new();
+        let mut create_paths = Vec::new();
+        let mut deleted_paths = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut total = 0usize;
+        for e in &c.manifest.worktree {
+            validate_checkpoint_path(&e.path)?;
+            if !seen.insert(e.path.clone()) {
+                return Err(GitError::Parse("duplicate restore path"));
+            }
+            if e.kind == "deleted" {
+                if e.category != "tracked" || e.blob.is_some() {
+                    return Err(GitError::Parse("invalid deleted path"));
+                }
+                deleted_paths.push(e.path.clone());
+                continue;
+            }
+            if e.kind == "symlink" && e.executable {
+                return Err(GitError::Parse("invalid symlink mode"));
+            }
+            let blob = e
+                .blob
+                .as_ref()
+                .ok_or(GitError::Parse("missing restore blob"))?;
+            let bytes = self.conflict_blob(repo, blob)?;
+            if e.kind == "symlink" && (bytes.is_empty() || bytes.contains(&0)) {
+                return Err(GitError::Parse("invalid symlink target"));
+            }
+            total = total
+                .checked_add(bytes.len())
+                .ok_or(GitError::OutputLimit)?;
+            if total > 8_388_608 || files.len() >= 500 {
+                return Err(GitError::Unavailable(
+                    "restore exceeds bounded snapshot limits",
+                ));
+            }
+            create_paths.push(e.path.clone());
+            files.push((e.path.clone(), e.kind.clone(), e.executable, bytes));
+        }
+        let mut limitations = c.manifest.limitations.clone();
+        limitations.push("Restores only captured bytes to an exclusively created new detached worktree; incomplete, non-atomic, unauthenticated".into());
+        limitations.push(
+            "LFS pointers are restored as recorded bytes only; LFS payloads are not recovered"
+                .into(),
+        );
+        limitations.push(
+            "Git operation state such as MERGE_HEAD, rebase metadata and reflogs is not captured"
+                .into(),
+        );
+        limitations.push("Symlink targets are recreated verbatim and may point outside the worktree; they are never followed during restore".into());
+        Ok((
+            RestorePlan {
+                checkpoint: c,
+                destination: target.to_str().ok_or(GitError::NonUnicode)?.into(),
+                create_paths,
+                deleted_paths,
+                limitations,
+            },
+            index,
+            files,
+        ))
+    }
+    /// Verify checkpoint and preview an exclusive new-worktree recovery, without writing Git refs or files.
+    pub fn checkpoint_restore_plan(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+    ) -> Result<rit_core::checkpoint::RestorePlan, GitError> {
+        Ok(self.checkpoint_restore_prepare(repo, id, dest)?.0)
+    }
+    /// Restore the captured subset only into a newly created detached worktree; never overwrite existing paths.
+    pub fn checkpoint_restore_new(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+        dest: &Path,
+    ) -> Result<rit_core::checkpoint::RestoreObservation, GitError> {
+        use rit_core::checkpoint::{RestoreId, RestoreOperation};
+        let (plan, index, files) = self.checkpoint_restore_prepare(repo, id, dest)?;
+        let format = plan.checkpoint.object.algorithm();
+        let rid = RestoreId::new();
+        let zero = "0".repeat(plan.checkpoint.object.as_hex().len());
+        let reference = format!("refs/rit/restores/{rid}/manifest");
+        let hold = format!("refs/rit/restores/{rid}/checkpoint");
+        let mut op = RestoreOperation {
+            schema_version: 1,
+            id: rid,
+            checkpoint: id,
+            checkpoint_object: plan.checkpoint.object.clone(),
+            base: plan.checkpoint.manifest.base.clone(),
+            destination: plan.destination.clone(),
+            state: "created".into(),
+            completed_paths: Vec::new(),
+            current_path: None,
+            failure: None,
+            action:
+                "inspect actual worktree and files; never automatically replay, overwrite or remove"
+                    .into(),
+        };
+        let mut oid = self.write_json_ref(repo, format, &reference, &op, &zero)?;
+        let action = (|| -> Result<(), GitError> {
+            let args = [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "update-ref",
+                hold.as_str(),
+                op.checkpoint_object.as_hex(),
+                zero.as_str(),
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            self.run(Some(repo), &args, "workspace restore retain checkpoint")?;
+            op.state = "checkpoint_retained".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            let target = Path::new(&op.destination);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(target)
+                    .map_err(|source| GitError::Path {
+                        path: target.into(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(GitError::Unavailable("restore path unavailable"));
+            }
+            op.state = "directory_created".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            let args = vec![
+                "-c".into(),
+                "core.hooksPath=/dev/null".into(),
+                "worktree".into(),
+                "add".into(),
+                "--no-checkout".into(),
+                "--detach".into(),
+                target.as_os_str().into(),
+                op.base.as_hex().into(),
+            ];
+            self.run(Some(repo), &args, "workspace restore worktree add")?;
+            let actual = self
+                .worktrees(repo)?
+                .into_iter()
+                .find(|w| w.path == op.destination)
+                .ok_or(GitError::Parse("restore worktree missing"))?;
+            if !actual.detached || actual.head.as_ref() != Some(&op.base) {
+                return Err(GitError::Parse("restore worktree mismatch"));
+            }
+            op.state = "worktree_created".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            for (path, kind, executable, bytes) in &files {
+                op.current_path = Some(path.clone());
+                oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+                restore_create_entry(target, path, kind, *executable, bytes)?;
+                op.completed_paths.push(path.clone());
+                op.current_path = None;
+                oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            }
+            op.state = "files_created".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            let gitdir = self.query(
+                target,
+                &["rev-parse", "--absolute-git-dir"],
+                "workspace restore gitdir",
+            )?;
+            let dir = Path::new(&gitdir)
+                .canonicalize()
+                .map_err(GitError::Launch)?;
+            let common = Path::new(&self.inspect(repo)?.common_git_dir)
+                .join("worktrees")
+                .canonicalize()
+                .map_err(GitError::Launch)?;
+            if dir.parent() != Some(common.as_path()) {
+                return Err(GitError::Parse("unexpected restore gitdir"));
+            }
+            restore_create_index(&dir, &index)?;
+            op.state = "index_created".into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            if read_worktree_file(&dir, "index")?.as_deref() != Some(index.as_slice()) {
+                return Err(GitError::Parse("restored index verification failed"));
+            }
+            for (path, kind, executable, bytes) in &files {
+                let actual = read_checkpoint_entry(target, path)?
+                    .ok_or(GitError::Parse("restored path disappeared"))?;
+                if actual.0 != kind || actual.1 != *executable || actual.2 != *bytes {
+                    return Err(GitError::Parse("restored path verification failed"));
+                }
+            }
+            for path in &plan.deleted_paths {
+                if read_checkpoint_entry(target, path)?.is_some() {
+                    return Err(GitError::Parse("deleted path unexpectedly exists"));
+                }
+            }
+            op.state = "completed".into();
+            op.action =
+                "captured subset verified once; inspect before use, it may change immediately"
+                    .into();
+            oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            Ok(())
+        })();
+        if let Err(e) = action {
+            op.failure = Some(format!("{}: {e}", op.state));
+            let _result = self.write_json_ref(repo, format, &reference, &op, oid.as_hex());
+            return Err(GitError::Provisioning {
+                id: rid.to_string(),
+            });
+        }
+        self.checkpoint_restore_list(repo)?
+            .into_iter()
+            .find(|x| x.operation.id == rid)
+            .ok_or(GitError::Parse("restore operation missing"))
+    }
+    /// List restore intents and reconcile them with Git inventory without changing anything.
+    pub fn checkpoint_restore_list(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::RestoreObservation>, GitError> {
+        use rit_core::{
+            checkpoint::{RestoreObservation, RestoreOperation},
+            git_object::ObjectId,
+        };
+        let format = self.object_format(repo)?;
+        let refs = self.query(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/restores/",
+            ],
+            "workspace restore refs",
+        )?;
+        let trees = self.worktrees(repo)?;
+        let mut result = Vec::new();
+        for line in refs.lines() {
+            let f = line.split('\0').collect::<Vec<_>>();
+            if f.len() != 3 {
+                return Err(GitError::Parse("restore ref"));
+            }
+            if f[0].ends_with("/checkpoint") {
+                continue;
+            }
+            if f[2] != "blob" {
+                return Err(GitError::Parse("restore manifest ref"));
+            }
+            let raw = self.run(
+                Some(repo),
+                &["cat-file".into(), "blob".into(), f[1].into()],
+                "workspace restore manifest",
+            )?;
+            if raw.len() > 1_048_576 {
+                return Err(GitError::OutputLimit);
+            }
+            let op: RestoreOperation =
+                serde_json::from_slice(&raw).map_err(|_| GitError::Parse("restore manifest"))?;
+            if op.schema_version != 1
+                || f[0] != format!("refs/rit/restores/{}/manifest", op.id)
+                || op.base.algorithm() != format
+                || op.checkpoint_object.algorithm() != format
+                || !Path::new(&op.destination).is_absolute()
+                || !matches!(
+                    op.state.as_str(),
+                    "created"
+                        | "checkpoint_retained"
+                        | "directory_created"
+                        | "worktree_created"
+                        | "files_created"
+                        | "index_created"
+                        | "completed"
+                )
+            {
+                return Err(GitError::Parse("restore operation claims"));
+            }
+            for p in &op.completed_paths {
+                validate_checkpoint_path(p)?
+            }
+            if let Some(p) = &op.current_path {
+                validate_checkpoint_path(p)?
+            }
+            let pin = format!("refs/rit/restores/{}/checkpoint", op.id);
+            let pinned = refs.lines().any(|line| {
+                let fields = line.split('\0').collect::<Vec<_>>();
+                fields.len() == 3
+                    && fields[0] == pin
+                    && fields[1] == op.checkpoint_object.as_hex()
+                    && fields[2] == "commit"
+            });
+            let worktree = trees.iter().find(|w| w.path == op.destination).cloned();
+            let observation = if !pinned {
+                "checkpoint_ref_missing_or_mismatch"
+            } else if worktree.is_none() {
+                "worktree_missing_or_incomplete"
+            } else if worktree
+                .as_ref()
+                .is_some_and(|w| !w.detached || w.head.as_ref() != Some(&op.base))
+            {
+                "worktree_mismatch"
+            } else if op.state != "completed" {
+                "interrupted_manual_recovery_required"
+            } else {
+                "completed_inventory_only"
+            };
+            result.push(RestoreObservation {
+                operation: op,
+                object: ObjectId::new(format, f[1]).map_err(GitError::Parse)?,
+                worktree,
+                observation: observation.into(),
+            });
+        }
+        Ok(result)
     }
     fn write_json_ref<T: serde::Serialize>(
         &self,
@@ -3517,4 +3972,93 @@ fn read_checkpoint_entry(_: &Path, _: &str) -> Result<CapturedRawEntry, GitError
     Err(GitError::Unavailable(
         "content checkpoint unsupported on this platform",
     ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn restore_create_entry(
+    root: &Path,
+    path: &str,
+    kind: &str,
+    executable: bool,
+    bytes: &[u8],
+) -> Result<(), GitError> {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat, symlinkat};
+    use std::{
+        io::Write,
+        os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+        path::Component,
+    };
+    validate_checkpoint_path(path)?;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut dir = open(root, flags, Mode::empty()).map_err(|e| GitError::Launch(e.into()))?;
+    let mut parts = Path::new(path).components().peekable();
+    while let Some(Component::Normal(name)) = parts.next() {
+        if parts.peek().is_some() {
+            match mkdirat(&dir, name, Mode::from_raw_mode(0o700)) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => (),
+                Err(e) => return Err(GitError::Launch(e.into())),
+            };
+            dir =
+                openat(&dir, name, flags, Mode::empty()).map_err(|e| GitError::Launch(e.into()))?;
+            continue;
+        }
+        if kind == "symlink" {
+            symlinkat(OsStr::from_bytes(bytes), &dir, name)
+                .map_err(|e| GitError::Launch(e.into()))?;
+        } else if kind == "regular" {
+            let fd = openat(
+                &dir,
+                name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(if executable { 0o755 } else { 0o644 }),
+            )
+            .map_err(|e| GitError::Launch(e.into()))?;
+            let mut f = std::fs::File::from(fd);
+            f.write_all(bytes).map_err(GitError::Launch)?;
+            f.set_permissions(std::fs::Permissions::from_mode(if executable {
+                0o755
+            } else {
+                0o644
+            }))
+            .map_err(GitError::Launch)?;
+            f.sync_all().map_err(GitError::Launch)?;
+        } else {
+            return Err(GitError::Parse("unsupported restore kind"));
+        }
+        return Ok(());
+    }
+    Err(GitError::Parse("restore path"))
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn restore_create_entry(_: &Path, _: &str, _: &str, _: bool, _: &[u8]) -> Result<(), GitError> {
+    Err(GitError::Unavailable("restore unsupported"))
+}
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn restore_create_index(gitdir: &Path, bytes: &[u8]) -> Result<(), GitError> {
+    use rustix::fs::{Mode, OFlags, RenameFlags, open, openat, renameat_with};
+    use std::io::Write;
+    let dir = open(
+        gitdir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| GitError::Launch(e.into()))?;
+    let fd = openat(
+        &dir,
+        "index.lock",
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(|e| GitError::Launch(e.into()))?;
+    let mut file = std::fs::File::from(fd);
+    file.write_all(bytes).map_err(GitError::Launch)?;
+    file.sync_all().map_err(GitError::Launch)?;
+    drop(file);
+    renameat_with(&dir, "index.lock", &dir, "index", RenameFlags::NOREPLACE)
+        .map_err(|e| GitError::Launch(e.into()))?;
+    Ok(())
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn restore_create_index(_: &Path, _: &[u8]) -> Result<(), GitError> {
+    Err(GitError::Unavailable("restore unsupported"))
 }

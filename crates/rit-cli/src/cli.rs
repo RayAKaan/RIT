@@ -476,8 +476,31 @@ pub enum CheckpointCommand {
     Show { id: String },
     /// Preview full restore; disabled.
     Preview { id: String },
-    /// Restore; disabled.
-    Restore { id: String },
+    /// Recover a captured subset only into a new worktree; existing destinations remain disabled.
+    Restore {
+        id: String,
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        to: Option<PathBuf>,
+        #[arg(long)]
+        preview: bool,
+        /// Confirm creation of the new worktree.
+        #[arg(long)]
+        yes: bool,
+        /// Acknowledge that all V4/V5 checkpoints are incomplete and non-atomic.
+        #[arg(long)]
+        accept_incomplete: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List and reconcile recovery operations without changing them.
+    Restores {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

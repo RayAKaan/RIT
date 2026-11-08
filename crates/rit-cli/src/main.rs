@@ -567,6 +567,57 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             }
         }
         Command::Checkpoint {
+            command:
+                CheckpointCommand::Restore {
+                    id,
+                    repo: Some(repo),
+                    to: Some(to),
+                    preview,
+                    yes,
+                    accept_incomplete,
+                    json,
+                },
+        } => {
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid checkpoint ID".into()))?;
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            if preview {
+                let plan = service
+                    .restore_plan(&repo, id, &to)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                output::value(
+                    &serde_json::json!({"schema_version":1,"plan":plan,"worktree_or_refs_modified":false,"temporary_index_used":true}),
+                    json,
+                )
+                .map_err(|e| (RUNTIME_FAILURE, e))
+            } else if yes && accept_incomplete {
+                let restored = service
+                    .restore_new(&repo, id, &to)
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                output::value(&serde_json::json!({"schema_version":1,"restore":restored,"complete":false,"authenticated":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+            } else {
+                Err((RUNTIME_FAILURE,"new-worktree recovery requires --yes and --accept-incomplete; use --preview first".into()))
+            }
+        }
+        Command::Checkpoint {
+            command: CheckpointCommand::Restores { repo, json },
+        } => {
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let records = service
+                .restores(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"restores":records,"authenticated":false}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Checkpoint {
             command: CheckpointCommand::Inspect { id, repo, json },
         } => {
             let id = id
