@@ -404,3 +404,103 @@ fn real_committed_dependency_graph_and_impact_are_revision_bound() {
     assert!(result.iter().any(|s| s == "pkg/top.py"));
     assert!(!data.exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn commit_only_checkpoint_is_real_and_preserves_all_uncommitted_work() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let data = d.path().join("none");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("tracked"), "base\n").unwrap();
+    git(&["add", "tracked"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("tracked"), "staged\n").unwrap();
+    git(&["add", "tracked"]);
+    std::fs::write(repo.join("tracked"), "unstaged\n").unwrap();
+    std::fs::write(repo.join("untracked"), "user data").unwrap();
+    let index = std::fs::read(repo.join(".git/index")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::write(&hook, "#!/bin/sh\ntouch executed-hook\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .arg("--data-dir")
+            .arg(&data)
+            .args(args)
+            .env("XDG_CONFIG_HOME", d.path().join("config"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let path = repo.to_str().unwrap();
+    let created = run(&[
+        "checkpoint",
+        "create",
+        "--repo",
+        path,
+        "--commit-only",
+        "--json",
+    ]);
+    let item = &created["checkpoint"];
+    assert_eq!(item["commit"]["hex"], head);
+    assert!(
+        item["capture_scope"]
+            .as_str()
+            .unwrap()
+            .contains("index, working tree, untracked")
+    );
+    assert!(!repo.join("executed-hook").exists());
+    assert_eq!(std::fs::read(repo.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("tracked")).unwrap(),
+        "unstaged\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("untracked")).unwrap(),
+        "user data"
+    );
+    let id = item["id"].as_str().unwrap();
+    let list = run(&["checkpoint", "list", "--repo", path, "--json"]);
+    assert_eq!(list["checkpoints"].as_array().unwrap().len(), 1);
+    let verify = run(&["checkpoint", "verify", id, "--repo", path, "--json"]);
+    assert_eq!(verify["git_fsck"], "passed");
+    assert_eq!(verify["uncommitted_work_captured"], false);
+    git(&["gc", "--quiet"]);
+    assert_eq!(
+        run(&["checkpoint", "list", "--repo", path, "--json"])["checkpoints"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(git(&["rev-parse", "HEAD"]), head);
+    assert!(!data.exists());
+}

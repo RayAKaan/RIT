@@ -18,6 +18,9 @@ use thiserror::Error;
 /// Failures from Git discovery or a read-only Git operation. Raw stderr is intentionally hidden.
 #[derive(Debug, Error)]
 pub enum GitError {
+    /// The operation is not available on this platform or before validation.
+    #[error("operation unavailable: {0}")]
+    Unavailable(&'static str),
     /// Git executable was unavailable or could not be spawned.
     #[error("cannot start Git executable: {0}")]
     Launch(#[source] io::Error),
@@ -175,6 +178,7 @@ impl Git {
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
             .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_NO_LAZY_FETCH", "1")
             .env("LC_ALL", "C")
             .args([
                 "--no-optional-locks",
@@ -623,6 +627,121 @@ impl Git {
             files,
             omitted_non_regular: omitted,
         })
+    }
+    /// Create one commit-only Git checkpoint ref with an expected nonexistent old value.
+    /// This does not capture or alter the index, working tree, untracked files or submodule contents.
+    pub fn checkpoint_commit(
+        &self,
+        input: &Path,
+    ) -> Result<rit_core::checkpoint::CommitCheckpoint, GitError> {
+        use rit_core::{
+            checkpoint::{CheckpointId, CommitCheckpoint},
+            git_object::{ObjectFormat, ObjectId},
+        };
+        if !cfg!(target_os = "linux") {
+            return Err(GitError::Unavailable(
+                "commit checkpoint writes are not validated on this platform",
+            ));
+        }
+        let ins = self.inspect(input)?;
+        let hex = match ins.head {
+            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+            Head::Unborn { .. } => return Err(GitError::Parse("cannot checkpoint unborn HEAD")),
+        };
+        let format = ObjectFormat::parse(&ins.object_format)
+            .ok_or(GitError::Parse("unsupported object format"))?;
+        let commit = ObjectId::new(format, &hex).map_err(GitError::Parse)?;
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        if self.query(&cwd, &["cat-file", "-t", commit.as_hex()], "commit type")? != "commit" {
+            return Err(GitError::Parse("HEAD is not a commit"));
+        }
+        let id = CheckpointId::new();
+        let reference = format!("refs/rit/checkpoints/{id}/head");
+        let zero = "0".repeat(commit.as_hex().len());
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            reference.as_str(),
+            commit.as_hex(),
+            zero.as_str(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(&cwd), &args, "commit-only checkpoint")?;
+        Ok(CommitCheckpoint{id,reference,commit,capture_scope:"committed_head_only; index, working tree, untracked, ignored, submodule and LFS contents are not captured".into()})
+    }
+    /// Discover commit-only checkpoint references. This does not establish authority or integrity.
+    pub fn checkpoint_list(
+        &self,
+        input: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::CommitCheckpoint>, GitError> {
+        use rit_core::{
+            checkpoint::{CheckpointId, CommitCheckpoint},
+            git_object::ObjectId,
+        };
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let format = self.object_format(&cwd)?;
+        let text = self.query(
+            &cwd,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)",
+                "refs/rit/checkpoints/",
+            ],
+            "checkpoint refs",
+        )?;
+        let mut result = Vec::new();
+        for line in text.lines() {
+            let fields: Vec<_> = line.split('\0').collect();
+            if fields.len() != 3 || fields[2] != "commit" {
+                return Err(GitError::Parse("checkpoint ref fields"));
+            }
+            let id = fields[0]
+                .strip_prefix("refs/rit/checkpoints/")
+                .and_then(|s| s.strip_suffix("/head"))
+                .ok_or(GitError::Parse("checkpoint ref name"))?
+                .parse::<CheckpointId>()
+                .map_err(|_| GitError::Parse("checkpoint ID"))?;
+            result.push(CommitCheckpoint{id,reference:fields[0].into(),commit:ObjectId::new(format,fields[1]).map_err(GitError::Parse)?,capture_scope:"committed_head_only; index, working tree, untracked, ignored, submodule and LFS contents are not captured".into()});
+        }
+        Ok(result)
+    }
+    /// Check that a checkpoint's commit and reachable objects pass Git fsck, without a restore.
+    pub fn checkpoint_verify(
+        &self,
+        input: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<rit_core::checkpoint::CommitCheckpoint, GitError> {
+        let item = self
+            .checkpoint_list(input)?
+            .into_iter()
+            .find(|x| x.id == id)
+            .ok_or(GitError::Parse("checkpoint not found"))?;
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "fsck",
+            "--no-reflogs",
+            "--no-progress",
+            item.commit.as_hex(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        self.run(Some(&cwd), &args, "checkpoint integrity")?;
+        Ok(item)
     }
     /// Inspect an existing repository without registering or modifying it.
     pub fn inspect(&self, input: &Path) -> Result<Inspection, GitError> {

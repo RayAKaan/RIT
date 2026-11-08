@@ -1,4 +1,4 @@
-//! Typed, read-only Git inspection adapter.
+//! Typed Git inspection adapter with explicitly scoped commit-only checkpoint refs.
 #![forbid(unsafe_code)]
 mod process;
 mod status;

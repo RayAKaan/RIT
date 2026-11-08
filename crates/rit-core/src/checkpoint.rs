@@ -12,6 +12,29 @@ impl CheckpointId {
         Self(uuid::Uuid::new_v4())
     }
 }
+impl std::fmt::Display for CheckpointId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::str::FromStr for CheckpointId {
+    type Err = uuid::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        uuid::Uuid::parse_str(s).map(Self)
+    }
+}
+/// Commit-only reference. It does not capture staged, unstaged or untracked content.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommitCheckpoint {
+    /// Stable ID derived from its Git ref.
+    pub id: CheckpointId,
+    /// Git reference under refs/rit/checkpoints.
+    pub reference: String,
+    /// Committed HEAD object captured.
+    pub commit: crate::git_object::ObjectId,
+    /// Explicit coverage limitation.
+    pub capture_scope: String,
+}
 impl Default for CheckpointId {
     fn default() -> Self {
         Self::new()

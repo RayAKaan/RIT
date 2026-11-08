@@ -259,3 +259,36 @@ impl GitReadService {
         Ok(self.git.diff(path)?)
     }
 }
+
+/// Explicit commit-only checkpoint service; it does not capture uncommitted work or use the registry.
+pub struct GitCheckpointService {
+    git: Git,
+}
+impl GitCheckpointService {
+    /// Construct a service with the configured Git adapter.
+    pub fn new(git: Git) -> Self {
+        Self { git }
+    }
+    /// Create a commit-only reference after explicit caller confirmation of its limited coverage.
+    pub fn create_commit_only(
+        &self,
+        repo: &Path,
+    ) -> Result<rit_core::checkpoint::CommitCheckpoint, ApplicationError> {
+        Ok(self.git.checkpoint_commit(repo)?)
+    }
+    /// List commit-only checkpoint references.
+    pub fn list(
+        &self,
+        repo: &Path,
+    ) -> Result<Vec<rit_core::checkpoint::CommitCheckpoint>, ApplicationError> {
+        Ok(self.git.checkpoint_list(repo)?)
+    }
+    /// Check reachable commit objects using Git fsck.
+    pub fn verify(
+        &self,
+        repo: &Path,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<rit_core::checkpoint::CommitCheckpoint, ApplicationError> {
+        Ok(self.git.checkpoint_verify(repo, id)?)
+    }
+}

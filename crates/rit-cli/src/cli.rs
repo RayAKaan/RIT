@@ -92,7 +92,7 @@ pub enum Command {
         #[command(subcommand)]
         command: SubmissionCommand,
     },
-    /// Checkpoint operations (currently unavailable).
+    /// Commit-only Git checkpoints; full capture and restore are unavailable.
     Checkpoint {
         #[command(subcommand)]
         command: CheckpointCommand,
@@ -340,13 +340,33 @@ pub enum AgentCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CheckpointCommand {
-    /// Capture; disabled.
-    Create { workspace: String },
-    /// List; disabled.
-    List { workspace: String },
-    /// Inspect metadata; disabled.
+    /// Create an explicitly limited committed-HEAD reference; no uncommitted work is captured.
+    Create {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        commit_only: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List commit-only checkpoint refs.
+    List {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify a commit-only checkpoint with Git fsck.
+    Verify {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show metadata; disabled.
     Show { id: String },
-    /// Preview partial restore; disabled.
+    /// Preview full restore; disabled.
     Preview { id: String },
     /// Restore; disabled.
     Restore { id: String },

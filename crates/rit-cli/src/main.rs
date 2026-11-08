@@ -5,7 +5,8 @@ mod output;
 
 use clap::Parser;
 use cli::{
-    Cli, Command, ConfigCommand, DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand,
+    CheckpointCommand, Cli, Command, ConfigCommand, DependenciesCommand, McpCommand,
+    RepositoryCommand, StorageCommand,
 };
 use rit_core::{
     config::{self, ConfigFile, Overrides},
@@ -142,6 +143,58 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             };
             let reports=files.iter().map(|file| {let impact=domain.impact(file,&graph.commit.to_string());serde_json::json!({"changed":file,"known_dependents":impact.known_dependents,"complete":false})}).collect::<Vec<_>>();
             output::value(&serde_json::json!({"schema_version":1,"commit":graph.commit,"reports":reports,"unresolved":graph.unresolved,"problematic_files":graph.problematic_files,"omitted_non_regular":graph.omitted_non_regular,"complete":false,"scope":graph.scope}),json).map_err(|e|(RUNTIME_FAILURE,e))
+        }
+        Command::Checkpoint {
+            command:
+                CheckpointCommand::Create {
+                    repo,
+                    commit_only,
+                    json,
+                },
+        } => {
+            if !commit_only {
+                return Err((RUNTIME_FAILURE,"operation unavailable: full checkpoint capture is not implemented; --commit-only preserves committed HEAD only".into()));
+            }
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let item = service
+                .create_commit_only(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"checkpoint":item}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Checkpoint {
+            command: CheckpointCommand::List { repo, json },
+        } => {
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let items = service
+                .list(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"checkpoints":items}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Checkpoint {
+            command: CheckpointCommand::Verify { repo, id, json },
+        } => {
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid checkpoint ID".into()))?;
+            let service = rit_application::GitCheckpointService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let item = service
+                .verify(&repo, id)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(&serde_json::json!({"schema_version":1,"checkpoint":item,"git_fsck":"passed","uncommitted_work_captured":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
         }
         Command::Task { .. }
         | Command::Submission { .. }
