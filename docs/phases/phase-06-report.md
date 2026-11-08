@@ -1,0 +1,3 @@
+# Phase 6 — checkpoint foundation
+
+Metadata, content references, a non-writing partial preview with exact-name conflict reporting, and provider/disabled CLI interfaces are implemented. `executable` is always false; the preview does not validate paths, content, completeness, path aliases or live filesystem state. No capture, deduplication, retention, content verification, disposable-repo capture/restore test or restore exists. Before enabling restore, implement transactional safety and recovery, newer-work protection, and explicit LFS, submodules, large files, links, modes, sparse checkout, ignored files and secret policies. No files are restored by this code.

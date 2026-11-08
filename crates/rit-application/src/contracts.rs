@@ -110,3 +110,18 @@ pub trait ActivityObserver {
         workspace: rit_core::workspace::WorkspaceId,
     ) -> Result<rit_core::activity::Observation, CapabilityError>;
 }
+/// Checkpoint provider contract; durable capture and restore are not implemented.
+pub trait CheckpointProvider {
+    /// Read metadata after authorization.
+    fn get(
+        &self,
+        actor: &ActorContext,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<rit_core::checkpoint::Checkpoint, CapabilityError>;
+    /// Restore must remain disabled until complete safety and authorization gates pass.
+    fn restore(
+        &mut self,
+        actor: &ActorContext,
+        id: rit_core::checkpoint::CheckpointId,
+    ) -> Result<(), CapabilityError>;
+}

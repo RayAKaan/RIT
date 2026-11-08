@@ -6,6 +6,8 @@
 
 /// Snapshot activity reconciliation.
 pub mod activity;
+/// Checkpoint metadata and preview.
+pub mod checkpoint;
 pub mod config;
 pub mod error;
 /// Repository identity, inspection, and status domain types.

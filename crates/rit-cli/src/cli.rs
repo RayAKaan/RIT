@@ -62,6 +62,11 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Checkpoint operations (currently unavailable).
+    Checkpoint {
+        #[command(subcommand)]
+        command: CheckpointCommand,
+    },
     /// Workspace operations (currently unavailable).
     Workspace {
         #[command(subcommand)]
@@ -236,4 +241,18 @@ pub enum AgentCommand {
     Run { workspace: String },
     /// Inspect agent activity; disabled.
     Activity { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CheckpointCommand {
+    /// Capture; disabled.
+    Create { workspace: String },
+    /// List; disabled.
+    List { workspace: String },
+    /// Inspect metadata; disabled.
+    Show { id: String },
+    /// Preview partial restore; disabled.
+    Preview { id: String },
+    /// Restore; disabled.
+    Restore { id: String },
 }
