@@ -879,3 +879,118 @@ fn filtered_workspace_is_real_but_explicitly_not_checked_out() {
     assert!(target.join(".git").exists());
     assert!(!target.join("example.txt").exists());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn native_watcher_observes_concurrent_changes_in_rit_created_workspaces() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Fixture")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("shared.py"), "VALUE=0\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let mut ids = std::collections::HashSet::new();
+    let mut paths = Vec::new();
+    for i in 0..5 {
+        let p = d.path().join(format!("work{i}"));
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args([
+                "workspace",
+                "create",
+                "--repo",
+                rp,
+                "--path",
+                p.to_str().unwrap(),
+                "--name",
+                "watch",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["workspace"]["state"], "ready");
+        ids.insert(v["workspace"]["id"].as_str().unwrap().to_string());
+        paths.push(p);
+    }
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args([
+            "activity",
+            "watch",
+            "--repo",
+            rp,
+            "--interval-ms",
+            "1000",
+            "--duration-ms",
+            "3500",
+            "--json",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let start: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(start["type"], "watch_started");
+    let threads = paths
+        .into_iter()
+        .enumerate()
+        .map(|(i, path)| {
+            std::thread::spawn(move || {
+                std::fs::write(path.join("shared.py"), format!("VALUE={i}\n")).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut reconciled = false;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if v["type"] == "notifications" {
+            for e in v["batch"]["events"].as_array().unwrap() {
+                if e["path"] == "shared.py" {
+                    if let Some(id) = e["workspace_id"].as_str() {
+                        seen.insert(id.to_string());
+                    }
+                    assert!(e["actor_id"].is_null());
+                }
+            }
+        }
+        if v["type"] == "git_reconciliation" {
+            reconciled = true;
+        }
+    }
+    assert!(child.wait().unwrap().success());
+    assert_eq!(seen, ids);
+    assert!(reconciled);
+}

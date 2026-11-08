@@ -122,6 +122,88 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             };
             output::value(&value.0, value.1).map_err(|e| (RUNTIME_FAILURE, e))
         }
+        Command::Activity {
+            command:
+                ActivityCommand::Watch {
+                    repo,
+                    json,
+                    count: None,
+                    interval_ms,
+                    duration_ms,
+                },
+        } => {
+            if !(250..=60_000).contains(&interval_ms)
+                || duration_ms.is_some_and(|n| n == 0 || n > 86_400_000)
+            {
+                return Err((
+                    RUNTIME_FAILURE,
+                    "invalid watcher interval or duration".into(),
+                ));
+            }
+            let git =
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let service = rit_application::GitReadService::new(git.clone());
+            let mut watcher = rit_application::watcher::ActivityWatcher::start(git, &repo, 1024)
+                .map_err(|e| (RUNTIME_FAILURE, e))?;
+            let emit = |v: &serde_json::Value| -> Result<(), (u8, String)> {
+                output::value(v, json).map_err(|e| (RUNTIME_FAILURE, e))?;
+                use std::io::Write as _;
+                std::io::stdout()
+                    .flush()
+                    .map_err(|e| (RUNTIME_FAILURE, e.to_string()))
+            };
+            let initial = service
+                .activity_snapshot(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            emit(
+                &serde_json::json!({"schema_version":1,"type":"watch_started","activity":initial,"complete_event_history":false}),
+            )?;
+            let start = std::time::Instant::now();
+            let mut last = start;
+            loop {
+                if duration_ms
+                    .is_some_and(|d| start.elapsed() >= std::time::Duration::from_millis(d))
+                {
+                    break;
+                }
+                let batch = watcher.poll(std::time::Duration::from_millis(100));
+                if !batch.events.is_empty()
+                    || batch.overflowed
+                    || batch.watcher_error
+                    || batch.duplicates_suppressed > 0
+                {
+                    emit(
+                        &serde_json::json!({"schema_version":1,"type":"notifications","batch":batch}),
+                    )?;
+                }
+                if batch.watcher_error {
+                    watcher
+                        .restart()
+                        .map_err(|e| (RUNTIME_FAILURE, format!("watcher restart failed: {e}")))?;
+                    emit(
+                        &serde_json::json!({"schema_version":1,"type":"watch_restarted","gap_possible":true}),
+                    )?;
+                }
+                if batch.overflowed
+                    || batch.watcher_error
+                    || last.elapsed() >= std::time::Duration::from_millis(interval_ms)
+                {
+                    watcher.reconcile_watches().map_err(|e| {
+                        (RUNTIME_FAILURE, format!("watch registration failed: {e}"))
+                    })?;
+                    let snapshot = service
+                        .activity_snapshot(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    emit(
+                        &serde_json::json!({"schema_version":1,"type":"git_reconciliation","activity":snapshot,"gap_possible":batch.overflowed||batch.watcher_error}),
+                    )?;
+                    last = std::time::Instant::now();
+                }
+            }
+            emit(
+                &serde_json::json!({"schema_version":1,"type":"watch_stopped","complete_event_history":false}),
+            )
+        }
         Command::Activity { command } => {
             let (repo, json, count, interval, only_overlaps) = match command {
                 ActivityCommand::Reconcile { repo, json }
@@ -130,9 +212,13 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 ActivityCommand::Watch {
                     repo,
                     json,
-                    count,
+                    count: Some(count),
                     interval_ms,
+                    duration_ms: _,
                 } => (repo, json, count, interval_ms, false),
+                ActivityCommand::Watch { count: None, .. } => {
+                    return Err((INTERNAL_FAILURE, "watch mode dispatch error".into()));
+                }
             };
             if count == 0 || count > 1000 || (count > 1 && !(250..=60_000).contains(&interval)) {
                 return Err((

@@ -510,14 +510,18 @@ pub enum ActivityCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Poll Git snapshots a finite number of times; intermediate events can be missed.
+    /// Watch native notifications and periodically reconcile Git; events can be missed.
     Watch {
         #[arg(long)]
         repo: PathBuf,
         #[arg(long, default_value_t = 1000)]
         interval_ms: u64,
-        #[arg(long, default_value_t = 10)]
-        count: u32,
+        /// Explicit legacy snapshot polling count; omit to use native notifications.
+        #[arg(long)]
+        count: Option<u32>,
+        /// Stop notification mode after this many milliseconds (omit for continuous watch).
+        #[arg(long)]
+        duration_ms: Option<u64>,
         #[arg(long)]
         json: bool,
     },

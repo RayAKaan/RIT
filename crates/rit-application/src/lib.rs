@@ -331,3 +331,5 @@ impl WorkspaceService {
         Ok(self.git.workspace_lock(repo, id, reason)?)
     }
 }
+/// Native notification watcher; bounded and ephemeral, with reconciliation required.
+pub mod watcher;
