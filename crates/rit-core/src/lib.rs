@@ -9,6 +9,8 @@ pub mod activity;
 /// Checkpoint metadata and preview.
 pub mod checkpoint;
 pub mod config;
+/// Read-only conflict evidence.
+pub mod conflict;
 pub mod error;
 /// Repository identity, inspection, and status domain types.
 pub mod repository;

@@ -141,3 +141,15 @@ pub trait IntegrationProvider {
         expected_target: &str,
     ) -> Result<(), CapabilityError>;
 }
+/// Optional semantic conflict adapter, e.g. a future tree-sitter or Mergiraf integration.
+pub trait ConflictAnalyzer {
+    /// Analyze explicit inputs after authorization; never overwrite files.
+    fn analyze(
+        &self,
+        actor: &ActorContext,
+        language: rit_core::conflict::Language,
+        base: &str,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<rit_core::conflict::SemanticEvidence, CapabilityError>;
+}
