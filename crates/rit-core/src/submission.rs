@@ -133,6 +133,9 @@ impl std::str::FromStr for CandidateId {
         uuid::Uuid::parse_str(s).map(Self)
     }
 }
+fn submitted_state() -> String {
+    "submitted".into()
+}
 /// Unauthenticated Git-ref-backed submission, not an approval.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,6 +158,12 @@ pub struct GitSubmission {
     pub target_commit: crate::git_object::ObjectId,
     /// Changed paths relative to workspace base; no rename inference.
     pub changed_files: Vec<String>,
+    /// Cooperative lifecycle state; legacy V4 manifests default to submitted.
+    #[serde(default = "submitted_state")]
+    pub lifecycle: String,
+    /// Untrusted wall-clock creation time; absent for legacy V4 manifests.
+    #[serde(default)]
+    pub created_at: Option<u64>,
     /// Explicitly submitted commit only; ignored content and future edits are not included.
     pub scope: String,
 }
@@ -178,7 +187,7 @@ pub struct GitCandidate {
     pub target_commit: crate::git_object::ObjectId,
     /// Detached candidate worktree path.
     pub path: String,
-    /// `provisioning`, `ready` or `no_checkout`.
+    /// Last recorded provisioning step, `ready` or `no_checkout`.
     pub state: String,
     /// Materialization limitation if any.
     pub limitation: Option<String>,

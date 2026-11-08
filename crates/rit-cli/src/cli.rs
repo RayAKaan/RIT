@@ -109,12 +109,28 @@ pub enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Submit a clean managed workspace against a local target branch.
+    Submit {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        workspace: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect and statically validate candidates; publication and cleanup remain disabled.
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationCommand,
+    },
     /// Unauthenticated submissions and non-publishing candidates; approval is unavailable.
     Submission {
         #[command(subcommand)]
         command: SubmissionCommand,
     },
-    /// Bounded Git-object content and commit-only checkpoints; restore unavailable.
+    /// Bounded checkpoints and new-worktree-only captured-subset recovery.
     Checkpoint {
         #[command(subcommand)]
         command: CheckpointCommand,
@@ -547,10 +563,65 @@ pub enum SubmissionCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Cancel a submission without deleting its evidence or candidates.
+    Cancel {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reconcile submission sources and related candidates.
+    Reconcile {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview integration; disabled.
     Preview { id: String },
     /// Publish a validated candidate; disabled.
     Publish { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IntegrationCommand {
+    /// List candidate worktree observations.
+    List {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect one candidate, including target movement.
+    Inspect {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Re-run safe object and partial static checks; repository tests are not run.
+    Validate {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reconcile candidate records and Git inventory.
+    Reconcile {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cleanup remains disabled pending non-destructive proof.
+    Cleanup {
+        id: String,
+        #[arg(long)]
+        repo: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]

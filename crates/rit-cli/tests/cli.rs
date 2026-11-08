@@ -1693,6 +1693,20 @@ fn submission_builds_real_detached_candidate_without_publishing_and_reconciles_s
     assert!(result["dependency_analysis"].is_object());
     assert!(result["execution"].as_str().unwrap().starts_with("not run"));
     let cid = result["candidate"]["candidate"]["id"].as_str().unwrap();
+    let validated = cli(&["integration", "validate", cid, "--repo", rp, "--json"]);
+    assert!(
+        validated["validation"]["object_check"]
+            .as_str()
+            .unwrap()
+            .starts_with("passed")
+    );
+    assert!(validated["validation"]["dependency_analysis"].is_object());
+    assert!(
+        validated["validation"]["execution"]
+            .as_str()
+            .unwrap()
+            .starts_with("NOT_RUN")
+    );
     let commit = result["candidate"]["candidate"]["commit"]["hex"]
         .as_str()
         .unwrap();
@@ -2558,4 +2572,145 @@ fn checkpoint_refuses_concurrent_file_change_without_reverting_it() {
     assert!(listed.status.success());
     let items: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     assert!(items["content_checkpoints"].as_array().unwrap().is_empty());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn interrupted_candidate_is_discoverable_and_cancel_preserves_all_work() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("base.py"), "x=1\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let target = git(&repo, &["rev-parse", "HEAD"]);
+    let rp = repo.to_str().unwrap();
+    let work = d.path().join("source");
+    let cli = |args: &[&str]| {
+        let o = run(args, &[]);
+        assert!(o.status.success(), "{args:?}: {}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let w = cli(&[
+        "workspace",
+        "create",
+        "--repo",
+        rp,
+        "--path",
+        work.to_str().unwrap(),
+        "--name",
+        "source",
+        "--json",
+    ]);
+    let wid = w["workspace"]["id"].as_str().unwrap();
+    std::fs::write(work.join("feature.py"), "import base\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "source"]);
+    let source = git(&work, &["rev-parse", "HEAD"]);
+    let submission = cli(&[
+        "submit",
+        "--workspace",
+        wid,
+        "--target",
+        "refs/heads/main",
+        "--repo",
+        rp,
+        "--json",
+    ]);
+    let sid = submission["receipt"]["submission"]["id"].as_str().unwrap();
+    let wrapper = d.path().join("git-kill");
+    std::fs::write(&wrapper,"#!/bin/sh\ncase \"$*\" in *\"worktree add --no-checkout --detach\"*) kill -KILL \"$PPID\"; exit 97;; esac\nexec /usr/bin/git \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let candidate = d.path().join("candidate");
+    let killed = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args([
+            "--git-executable",
+            wrapper.to_str().unwrap(),
+            "submission",
+            "candidate",
+            sid,
+            "--repo",
+            rp,
+            "--path",
+            candidate.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!killed.status.success());
+    assert!(candidate.is_dir());
+    std::fs::write(candidate.join("keep-me"), "valuable\n").unwrap();
+    let seen = cli(&["integration", "reconcile", "--repo", rp, "--json"]);
+    let candidate_record = &seen["candidates"][0];
+    assert_eq!(candidate_record["candidate"]["state"], "directory_created");
+    assert_eq!(
+        candidate_record["observation"],
+        "interrupted_missing_worktree"
+    );
+    let cid = candidate_record["candidate"]["id"].as_str().unwrap();
+    let commit = candidate_record["candidate"]["commit"]["hex"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        git(
+            &repo,
+            &["rev-parse", &format!("refs/rit/candidates/{cid}/commit")]
+        ),
+        commit
+    );
+    let cancelled = cli(&["submission", "cancel", sid, "--repo", rp, "--json"]);
+    assert_eq!(cancelled["submission"]["lifecycle"], "cancelled");
+    let second = cli(&["submission", "cancel", sid, "--repo", rp, "--json"]);
+    assert_eq!(second["submission"]["lifecycle"], "cancelled");
+    let state = cli(&["submission", "reconcile", "--repo", rp, "--json"]);
+    assert_eq!(
+        state["submissions"][0]["candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let denied = run(
+        &[
+            "submission",
+            "candidate",
+            sid,
+            "--repo",
+            rp,
+            "--path",
+            d.path().join("later").to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(!denied.status.success());
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), target);
+    assert_eq!(git(&work, &["rev-parse", "HEAD"]), source);
+    assert_eq!(
+        std::fs::read_to_string(candidate.join("keep-me")).unwrap(),
+        "valuable\n"
+    );
+    assert_eq!(
+        git(
+            &repo,
+            &["rev-parse", &format!("refs/rit/candidates/{cid}/commit")]
+        ),
+        commit
+    );
 }

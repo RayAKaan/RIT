@@ -52,6 +52,32 @@ pub enum CandidateResult {
         publication: &'static str,
     },
 }
+/// Advisory candidate validation, never approval or permission to execute/publish.
+#[derive(Serialize)]
+pub struct CandidateValidation {
+    /// Current candidate inventory and target movement.
+    pub candidate: CandidateObservation,
+    /// Bounded object-integrity check; may be unavailable.
+    pub object_check: String,
+    /// Partial static analysis; never proof of semantic safety.
+    pub dependency_analysis: Option<rit_analysis::RepositoryGraph>,
+    /// Failure explanation if partial analysis could not run.
+    pub dependency_error: Option<String>,
+    /// Repository builds/tests never executed.
+    pub execution: &'static str,
+    /// Publication remains unavailable.
+    pub publication: &'static str,
+}
+/// Reconciled submission and related candidates; no approval claim.
+#[derive(Serialize)]
+pub struct SubmissionObservation {
+    /// Persisted unauthenticated submission.
+    pub submission: GitSubmission,
+    /// Whether current source and target still match, or why they cannot be verified.
+    pub source_target_check: String,
+    /// Related candidate observations; may include interrupted work.
+    pub candidates: Vec<CandidateObservation>,
+}
 /// Service backing CLI and potential scoped adapters.
 pub struct SubmissionService {
     git: Git,
@@ -100,6 +126,78 @@ impl SubmissionService {
     /// List and reconcile candidate metadata with Git worktree inventory.
     pub fn candidates(&self, repo: &Path) -> Result<Vec<CandidateObservation>, ApplicationError> {
         Ok(self.git.candidate_list(repo)?)
+    }
+    /// Cancel by expected-old-ref update; preserves all candidate/source data.
+    pub fn cancel(&self, repo: &Path, id: SubmissionId) -> Result<GitSubmission, ApplicationError> {
+        Ok(self.git.submission_cancel(repo, id)?)
+    }
+    /// Correlate existing submissions and candidates without modifying either.
+    pub fn reconcile(&self, repo: &Path) -> Result<Vec<SubmissionObservation>, ApplicationError> {
+        let submissions = self.git.submission_list(repo)?;
+        let candidates = self.git.candidate_list(repo)?;
+        Ok(submissions
+            .into_iter()
+            .map(|submission| {
+                let check = if submission.lifecycle == "cancelled" {
+                    "cancelled; source/target not checked".into()
+                } else {
+                    match self.git.submission_validate(repo, &submission) {
+                        Ok(()) => "matches at observation time".into(),
+                        Err(e) => format!("stale or unavailable: {e}"),
+                    }
+                };
+                let related = candidates
+                    .iter()
+                    .filter(|c| c.candidate.submission == submission.id)
+                    .cloned()
+                    .collect();
+                SubmissionObservation {
+                    submission,
+                    source_target_check: check,
+                    candidates: related,
+                }
+            })
+            .collect())
+    }
+    /// Re-run bounded read-only candidate checks without executing repository code.
+    pub fn validate_candidate(
+        &self,
+        repo: &Path,
+        id: rit_core::submission::CandidateId,
+    ) -> Result<CandidateValidation, ApplicationError> {
+        let candidate = self
+            .git
+            .candidate_list(repo)?
+            .into_iter()
+            .find(|x| x.candidate.id == id)
+            .ok_or(rit_git::GitError::Parse("candidate not found"))?;
+        if !matches!(candidate.observation.as_str(), "present" | "no_checkout") {
+            return Err(rit_git::GitError::Unavailable(
+                "candidate inventory or ref does not reconcile",
+            )
+            .into());
+        }
+        let object_check = match self
+            .git
+            .candidate_verify_objects(repo, &candidate.candidate.commit)
+        {
+            Ok(()) => "passed (Git fsck; auxiliary indexes excluded)".into(),
+            Err(e) => format!("unavailable or failed: {e}"),
+        };
+        let graph = GitReadService::new(self.git.clone())
+            .dependencies_revision(repo, candidate.candidate.commit.as_hex());
+        let (dependency_analysis, dependency_error) = match graph {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        Ok(CandidateValidation {
+            candidate,
+            object_check,
+            dependency_analysis,
+            dependency_error,
+            execution: "NOT_RUN: no authorized execution boundary",
+            publication: "NOT_AVAILABLE: no authenticated approval or protected publication",
+        })
     }
     /// Preview conflicts, construct if clean, and perform bounded static validation.
     pub fn candidate(

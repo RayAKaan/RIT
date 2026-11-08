@@ -2910,7 +2910,11 @@ impl Git {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sid = SubmissionId::new();
-        let item=GitSubmission{schema_version:1,id:sid,workspace:id,source_branch:workspace.manifest.branch,source_commit:source,base_commit:workspace.manifest.base,target_ref:target.into(),target_commit,changed_files:changed,scope:"committed source only; unauthenticated; ignored and later worktree changes excluded".into()};
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| GitError::Parse("clock before epoch"))?
+            .as_secs();
+        let item=GitSubmission{schema_version:2,id:sid,workspace:id,source_branch:workspace.manifest.branch,source_commit:source,base_commit:workspace.manifest.base,target_ref:target.into(),target_commit,changed_files:changed,lifecycle:"submitted".into(),created_at:Some(created_at),scope:"committed source only; unauthenticated; ignored and later worktree changes excluded".into()};
         let reference = format!("refs/rit/submissions/{sid}/manifest");
         let zero = "0".repeat(item.source_commit.as_hex().len());
         self.write_json_ref(repo, format, &reference, &item, &zero)?;
@@ -2948,7 +2952,8 @@ impl Git {
             }
             let item: GitSubmission =
                 serde_json::from_slice(&raw).map_err(|_| GitError::Parse("submission manifest"))?;
-            if item.schema_version != 1
+            if !matches!(item.schema_version, 1 | 2)
+                || !matches!(item.lifecycle.as_str(), "submitted" | "cancelled")
                 || f[0] != format!("refs/rit/submissions/{}/manifest", item.id)
                 || item.source_branch != format!("refs/heads/rit/workspaces/{}", item.workspace)
                 || !item.target_ref.starts_with("refs/heads/")
@@ -2970,12 +2975,66 @@ impl Git {
         }
         Ok(result)
     }
+    /// CAS-cancel a cooperative submission without deleting candidates or changing source/target refs.
+    pub fn submission_cancel(
+        &self,
+        repo: &Path,
+        id: rit_core::submission::SubmissionId,
+    ) -> Result<rit_core::submission::GitSubmission, GitError> {
+        let format = self.object_format(repo)?;
+        let reference = format!("refs/rit/submissions/{id}/manifest");
+        let before = self.query(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                reference.as_str(),
+            ],
+            "workspace submission ref",
+        )?;
+        let mut item = self
+            .submission_list(repo)?
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or(GitError::Parse("submission not found"))?;
+        let after = self.query(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                reference.as_str(),
+            ],
+            "workspace submission ref",
+        )?;
+        if before != after {
+            return Err(GitError::Unavailable(
+                "submission changed during cancellation",
+            ));
+        }
+        if item.lifecycle == "cancelled" {
+            return Ok(item);
+        }
+        if item.lifecycle != "submitted" {
+            return Err(GitError::Unavailable(
+                "submission state cannot be cancelled",
+            ));
+        }
+        item.lifecycle = "cancelled".into();
+        item.schema_version = 2;
+        self.write_json_ref(repo, format, &reference, &item, &before)?;
+        Ok(item)
+    }
     /// Recheck submission source and target against live Git before further work.
     pub fn submission_validate(
         &self,
         repo: &Path,
         item: &rit_core::submission::GitSubmission,
     ) -> Result<(), GitError> {
+        if item.lifecycle != "submitted" {
+            return Err(GitError::Unavailable("submission is not active"));
+        }
         let format = self.object_format(repo)?;
         let workspace = self
             .workspace_reconcile(repo)?
@@ -3061,6 +3120,23 @@ impl Git {
                 "target moved during candidate simulation",
             ));
         }
+        let fresh = self
+            .submission_list(repo)?
+            .into_iter()
+            .find(|v| v.id == submission)
+            .ok_or(GitError::Unavailable(
+                "submission removed during candidate creation",
+            ))?;
+        if fresh.lifecycle != "submitted"
+            || fresh.source_commit != item.source_commit
+            || fresh.target_commit != item.target_commit
+            || fresh.target_ref != item.target_ref
+        {
+            return Err(GitError::Unavailable(
+                "submission changed during candidate creation",
+            ));
+        }
+        self.submission_validate(repo, &fresh)?;
         let args = [
             "-c",
             "commit.gpgSign=false",
@@ -3117,7 +3193,7 @@ impl Git {
         let manifest_ref = format!("refs/rit/candidates/{cid}/manifest");
         let commit_ref = format!("refs/rit/candidates/{cid}/commit");
         let zero = "0".repeat(commit.as_hex().len());
-        let old = self.write_json_ref(repo, format, &manifest_ref, &c, &zero)?;
+        let mut old = self.write_json_ref(repo, format, &manifest_ref, &c, &zero)?;
         let result = (|| -> Result<(), GitError> {
             let args = [
                 "-c",
@@ -3131,6 +3207,8 @@ impl Git {
             .map(OsString::from)
             .collect::<Vec<_>>();
             self.run(Some(repo), &args, "workspace candidate ref")?;
+            c.state = "commit_reserved".into();
+            old = self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -3146,6 +3224,8 @@ impl Git {
             {
                 return Err(GitError::Unavailable("candidate path unavailable"));
             }
+            c.state = "directory_created".into();
+            old = self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
             let args = vec![
                 "-c".into(),
                 "core.hooksPath=/dev/null".into(),
@@ -3157,6 +3237,8 @@ impl Git {
                 commit.as_hex().into(),
             ];
             self.run(Some(repo), &args, "workspace candidate worktree")?;
+            c.state = "worktree_created".into();
+            old = self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
             let actual = self
                 .worktrees(repo)?
                 .into_iter()
@@ -3165,6 +3247,8 @@ impl Git {
             if !actual.detached || actual.head.as_ref() != Some(&commit) {
                 return Err(GitError::Parse("candidate worktree mismatch"));
             }
+            c.state = "worktree_verified".into();
+            old = self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
             match self.workspace_materialize(&target_path, &commit) {
                 Ok(()) => c.state = "ready".into(),
                 Err(GitError::Unavailable(reason)) => {
@@ -3176,7 +3260,12 @@ impl Git {
             self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex())?;
             Ok(())
         })();
-        if result.is_err() {
+        if let Err(e) = result {
+            c.limitation = Some(format!(
+                "failure after {}: {e}; inspect manually, do not auto-clean",
+                c.state
+            ));
+            let _recorded = self.write_json_ref(repo, format, &manifest_ref, &c, old.as_hex());
             return Err(GitError::Provisioning {
                 id: cid.to_string(),
             });
@@ -3229,7 +3318,16 @@ impl Git {
                 || c.target_commit.algorithm() != format
                 || !c.target_ref.starts_with("refs/heads/")
                 || !Path::new(&c.path).is_absolute()
-                || !matches!(c.state.as_str(), "ready" | "no_checkout" | "provisioning")
+                || !matches!(
+                    c.state.as_str(),
+                    "ready"
+                        | "no_checkout"
+                        | "provisioning"
+                        | "commit_reserved"
+                        | "directory_created"
+                        | "worktree_created"
+                        | "worktree_verified"
+                )
             {
                 return Err(GitError::Parse("candidate claims"));
             }
@@ -3248,8 +3346,11 @@ impl Git {
             });
             let worktree = trees.iter().find(|w| w.path == c.path).cloned();
             let observation = match &worktree {
+                None if !matches!(c.state.as_str(), "ready" | "no_checkout") => {
+                    "interrupted_missing_worktree"
+                }
                 None => "missing",
-                Some(_) if c.state == "provisioning" => "interrupted",
+                Some(_) if !matches!(c.state.as_str(), "ready" | "no_checkout") => "interrupted",
                 Some(_) if !ref_matches => "candidate_ref_mismatch",
                 Some(w) if !w.detached || w.head.as_ref() != Some(&c.commit) => "mismatch",
                 Some(_) if c.state == "no_checkout" => "no_checkout",

@@ -6,8 +6,8 @@ mod output;
 use clap::Parser;
 use cli::{
     ActivityCommand, CheckpointCommand, Cli, Command, ConfigCommand, ConflictsCommand,
-    DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand, SubmissionCommand,
-    WorkspaceCommand,
+    DependenciesCommand, IntegrationCommand, McpCommand, RepositoryCommand, StorageCommand,
+    SubmissionCommand, WorkspaceCommand,
 };
 use rit_core::{
     config::{self, ConfigFile, Overrides},
@@ -272,6 +272,98 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 json,
             )
             .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submit {
+            repo,
+            workspace,
+            target,
+            json,
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let id = workspace
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid workspace ID".into()))?;
+            let receipt = service
+                .create(&repo, id, &target)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"receipt":receipt}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Submission {
+            command: SubmissionCommand::Cancel { id, repo, json },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let id = id
+                .parse()
+                .map_err(|_| (RUNTIME_FAILURE, "invalid submission ID".into()))?;
+            let submission = service
+                .cancel(&repo, id)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(&serde_json::json!({"schema_version":1,"submission":submission,"authenticated":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+        }
+        Command::Submission {
+            command: SubmissionCommand::Reconcile { repo, json },
+        } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let submissions = service
+                .reconcile(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(&serde_json::json!({"schema_version":1,"submissions":submissions,"authenticated":false}),json).map_err(|e|(RUNTIME_FAILURE,e))
+        }
+        Command::Integration { command } => {
+            let service = rit_application::submissions::SubmissionService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let (value, json) = match command {
+                IntegrationCommand::List { repo, json }
+                | IntegrationCommand::Reconcile { repo, json } => (
+                    serde_json::json!({"schema_version":1,"candidates":service.candidates(&repo).map_err(|e|(RUNTIME_FAILURE,e.to_string()))?,"authenticated":false}),
+                    json,
+                ),
+                IntegrationCommand::Inspect { id, repo, json } => {
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid candidate ID".into()))?;
+                    let candidate = service
+                        .candidates(&repo)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
+                        .into_iter()
+                        .find(|v| v.candidate.id == id)
+                        .ok_or((RUNTIME_FAILURE, "candidate not found".into()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"candidate":candidate,"authenticated":false}),
+                        json,
+                    )
+                }
+                IntegrationCommand::Validate { id, repo, json } => {
+                    let id = id
+                        .parse()
+                        .map_err(|_| (RUNTIME_FAILURE, "invalid candidate ID".into()))?;
+                    let validation = service
+                        .validate_candidate(&repo, id)
+                        .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+                    (
+                        serde_json::json!({"schema_version":1,"validation":validation,"authenticated":false}),
+                        json,
+                    )
+                }
+                IntegrationCommand::Cleanup { .. } => {
+                    return Err((
+                        RUNTIME_FAILURE,
+                        "candidate cleanup unavailable: preservation not proven".into(),
+                    ));
+                }
+            };
+            output::value(&value, json).map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Submission {
             command:
