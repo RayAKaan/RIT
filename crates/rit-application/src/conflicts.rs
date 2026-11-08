@@ -36,6 +36,16 @@ pub struct StructuralCandidate {
     /// Analysis is advisory, not a semantic verdict.
     pub confidence: &'static str,
 }
+/// Cross-file change relationship backed by a partial source import edge.
+#[derive(Serialize)]
+pub struct CrossFileRisk {
+    /// Which side changed the importing file and which changed its dependency.
+    pub direction: &'static str,
+    /// The actual parser and revision-bound import edge.
+    pub edge: rit_analysis::ResolvedImport,
+    /// Advisory only; not a proven semantic conflict.
+    pub confidence: &'static str,
+}
 /// Ephemeral merge report.
 #[derive(Serialize)]
 pub struct ConflictReport {
@@ -47,6 +57,12 @@ pub struct ConflictReport {
     pub structural_candidates: Vec<StructuralCandidate>,
     /// Files with unsupported, missing, invalid or oversized structural inputs.
     pub structural_unavailable: Vec<String>,
+    /// Same paths changed on both sides; overlap is not necessarily a conflict.
+    pub shared_changed_paths: Vec<String>,
+    /// Cross-side changed import/dependency relationships, not semantic proof.
+    pub cross_file_risks: Vec<CrossFileRisk>,
+    /// Partial graph failures or omitted coverage, never a clean verdict.
+    pub cross_file_limitations: Vec<String>,
     /// No semantic completeness or resolution verification is claimed.
     pub complete: bool,
 }
@@ -203,11 +219,84 @@ impl ConflictService {
                 }
             }
         }
+        let left_changes = simulation
+            .changed_left
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let right_changes = simulation
+            .changed_right
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let shared_changed_paths = left_changes
+            .intersection(&right_changes)
+            .map(|p| (*p).to_owned())
+            .collect();
+        let mut cross_file_risks = Vec::new();
+        let mut cross_file_limitations=vec!["Import edges and changed paths are partial, heuristic and relative to the first merge base; no semantic conflict or safety is proven".into()];
+        for (revision, changed_importer, changed_dependency, direction) in [
+            (
+                &simulation.left,
+                &left_changes,
+                &right_changes,
+                "left_importer_right_dependency",
+            ),
+            (
+                &simulation.right,
+                &right_changes,
+                &left_changes,
+                "right_importer_left_dependency",
+            ),
+        ] {
+            if changed_importer.is_empty() || changed_dependency.is_empty() {
+                continue;
+            }
+            let graph = self
+                .git
+                .source_snapshot_revision(repo, Some(revision.as_hex()))
+                .map_err(crate::ApplicationError::from)
+                .and_then(|snapshot| {
+                    rit_analysis::repository_graph(snapshot).map_err(crate::ApplicationError::from)
+                });
+            match graph {
+                Ok(graph) => {
+                    if graph.omitted_non_regular > 0
+                        || !graph.problematic_files.is_empty()
+                        || !graph.unresolved.is_empty()
+                    {
+                        cross_file_limitations.push(format!(
+                            "{direction}: {} omitted, {} problematic files, {} unresolved imports",
+                            graph.omitted_non_regular,
+                            graph.problematic_files.len(),
+                            graph.unresolved.len()
+                        ));
+                    }
+                    for edge in graph.edges {
+                        if edge.dependent != edge.dependency
+                            && changed_importer.contains(edge.dependent.as_str())
+                            && changed_dependency.contains(edge.dependency.as_str())
+                        {
+                            cross_file_risks.push(CrossFileRisk{direction,edge,confidence:"advisory_cross_side_import_relationship_not_semantic_proof"});
+                            if cross_file_risks.len() > 10_000 {
+                                return Err(rit_git::GitError::OutputLimit.into());
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    cross_file_limitations.push(format!("{direction} analysis unavailable: {e}"))
+                }
+            }
+        }
         Ok(ConflictReport {
             simulation,
             classifications: classes,
             structural_candidates: structural,
             structural_unavailable: unavailable.into_iter().collect(),
+            shared_changed_paths,
+            cross_file_risks,
+            cross_file_limitations,
             complete: false,
         })
     }

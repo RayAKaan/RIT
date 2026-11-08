@@ -3972,3 +3972,100 @@ fn staged_dependency_graph_uses_index_not_unstaged_bytes_and_reports_impact_evid
     assert!(!conflict.status.success());
     assert!(text(&conflict.stderr).contains("unmerged source index entries"));
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn clean_merge_reports_advisory_cross_file_changed_dependency_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        text(&o.stdout).trim().to_owned()
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("api.py"), "def compute(x):\n    return x\n").unwrap();
+    std::fs::write(
+        repo.join("client.py"),
+        "from api import compute\nvalue = compute(1)\n",
+    )
+    .unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let cli = |a: &[&str]| {
+        let o = run(a, &[]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let left = d.path().join("left");
+    let right = d.path().join("right");
+    for (path, name) in [(&left, "left"), (&right, "right")] {
+        cli(&[
+            "workspace",
+            "create",
+            "--repo",
+            rp,
+            "--path",
+            path.to_str().unwrap(),
+            "--name",
+            name,
+            "--json",
+        ]);
+    }
+    std::fs::write(
+        left.join("client.py"),
+        "from api import compute\nvalue = compute(2)\n",
+    )
+    .unwrap();
+    git(&left, &["add", "."]);
+    git(&left, &["commit", "-qm", "left"]);
+    std::fs::write(
+        right.join("api.py"),
+        "def compute(x, y):\n    return x + y\n",
+    )
+    .unwrap();
+    git(&right, &["add", "."]);
+    git(&right, &["commit", "-qm", "right"]);
+    let l = git(&left, &["rev-parse", "HEAD"]);
+    let r = git(&right, &["rev-parse", "HEAD"]);
+    let before = git(&repo, &["show-ref"]);
+    let v = cli(&[
+        "conflicts",
+        "simulate",
+        "--repo",
+        rp,
+        "--left",
+        &l,
+        "--right",
+        &r,
+        "--json",
+    ]);
+    let report = &v["conflicts"];
+    assert_eq!(report["simulation"]["has_conflicts"], false);
+    assert_eq!(report["complete"], false);
+    let risks = report["cross_file_risks"].as_array().unwrap();
+    assert!(risks.iter().any(|risk| {
+        risk["direction"] == "left_importer_right_dependency"
+            && risk["edge"]["dependent"] == "client.py"
+            && risk["edge"]["dependency"] == "api.py"
+            && risk["confidence"]
+                .as_str()
+                .unwrap()
+                .contains("not_semantic_proof")
+    }));
+    assert_eq!(git(&repo, &["show-ref"]), before);
+    assert_eq!(git(&left, &["rev-parse", "HEAD"]), l);
+    assert_eq!(git(&right, &["rev-parse", "HEAD"]), r);
+}
