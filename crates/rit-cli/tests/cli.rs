@@ -1477,6 +1477,74 @@ fn content_checkpoint_captures_staged_raw_worktree_untracked_ignored_and_links_w
     let list = run(&["checkpoint", "list", "--repo", rp, "--json"]);
     assert_eq!(list["content_checkpoints"].as_array().unwrap().len(), 1);
     run(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
+    // Substitute a structurally valid Git commit with an index tree entry inconsistent
+    // with its unchanged manifest. This is integrity detection, not authentication.
+    let original = c["object"]["hex"].as_str().unwrap();
+    let tree_text = git(&repo, &["ls-tree", original]);
+    let changed_tree = tree_text
+        .lines()
+        .map(|line| {
+            if line.ends_with("\tindex") {
+                format!("100644 blob {}\tindex", staged_oid)
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    use std::io::Write as _;
+    let mut process = std::process::Command::new("git")
+        .args(["mktree"])
+        .current_dir(&repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    process
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(changed_tree.as_bytes())
+        .unwrap();
+    let out = process.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let changed_tree = String::from_utf8(out.stdout).unwrap();
+    let forged = git(
+        &repo,
+        &[
+            "commit-tree",
+            changed_tree.trim(),
+            "-p",
+            manifest["base"]["hex"].as_str().unwrap(),
+            "-m",
+            "forged metadata",
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "update-ref",
+            c["reference"].as_str().unwrap(),
+            &forged,
+            original,
+        ],
+    );
+    let verify_bad = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args(["checkpoint", "verify", id, "--repo", rp, "--json"])
+        .output()
+        .unwrap();
+    assert!(!verify_bad.status.success());
+    git(
+        &repo,
+        &[
+            "update-ref",
+            c["reference"].as_str().unwrap(),
+            original,
+            &forged,
+        ],
+    );
+    run(&["checkpoint", "verify", id, "--repo", rp, "--json"]);
     assert_eq!(std::fs::read(&idx).unwrap(), original_index);
     let restore = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
         .args(["checkpoint", "restore", id])

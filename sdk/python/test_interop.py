@@ -27,7 +27,11 @@ class Interop(unittest.TestCase):
                     p.stdin.write(json.dumps(req)+'\n'); p.stdin.flush()
                     return json.loads(p.stdout.readline())
                 c=Client(transport)
-                self.assertEqual(len(c.request('tools/list')['tools']),6)
+                self.assertEqual(len(c.request('tools/list')['tools']),10)
+                for name, field in [('workspace.list','reconciliation'), ('checkpoint.list','content_checkpoints'), ('submission.list','submissions'), ('candidate.list','candidates')]:
+                    item = c.request('tools/call', {'name':name, 'arguments':{}})['structuredContent']
+                    self.assertIn(field, item)
+                    self.assertFalse(item['authenticated'])
                 result=c.request('tools/call',{'name':'repository.inspect','arguments':{}})
                 self.assertEqual(result['structuredContent']['inspection']['object_format'],'sha1')
                 with self.assertRaises(RuntimeError): c.request('tools/call',{'name':'repository.inspect','arguments':{'path':'..'}})

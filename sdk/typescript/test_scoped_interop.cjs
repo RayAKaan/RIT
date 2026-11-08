@@ -13,7 +13,10 @@ const queue=[];readline.createInterface({input:child.stdout}).on('line',line=>{c
 child.on('error',err=>{for(const pending of queue.splice(0))pending.reject(err);});
 const transport=request=>new Promise((resolve,reject)=>{queue.push({resolve,reject});child.stdin.write(JSON.stringify(request)+'\n');});
 (async()=>{const client=new Client(transport);
-  const list=await client.request('tools/list');assert.equal(list.tools.length,6);
+  const list=await client.request('tools/list');assert.equal(list.tools.length,10);
+  for (const [name,field] of [["workspace.list","reconciliation"],["checkpoint.list","content_checkpoints"],["submission.list","submissions"],["candidate.list","candidates"]]) {
+    const data=(await client.request("tools/call",{name,arguments:{}})).structuredContent;assert.ok(field in data);assert.equal(data.authenticated,false);
+  }
   const result=await client.request('tools/call',{name:'repository.inspect',arguments:{}});assert.equal(result.structuredContent.inspection.object_format,'sha1');
   await assert.rejects(client.request('tools/call',{name:'repository.inspect',arguments:{path:'..'}}));
   child.stdin.end();const status=await new Promise(resolve=>child.on('close',resolve));assert.equal(status,0);console.log('TypeScript scoped repository read and path denial passed');

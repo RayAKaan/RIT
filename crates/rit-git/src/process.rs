@@ -1468,6 +1468,7 @@ impl Git {
             source,
         })?;
         let format = self.object_format(&cwd)?;
+        let common = self.inspect(&cwd)?.common_git_dir;
         let worktrees = self.worktrees(&cwd)?;
         let text = self.query(
             &cwd,
@@ -1519,7 +1520,10 @@ impl Git {
             }
             .to_string();
             let status = if observation == "present" {
-                self.inspect(Path::new(&m.path)).ok().and_then(|i| i.status)
+                self.inspect(Path::new(&m.path))
+                    .ok()
+                    .filter(|i| i.common_git_dir == common)
+                    .and_then(|i| i.status)
             } else {
                 None
             };
@@ -2416,6 +2420,11 @@ impl Git {
             .ok_or(GitError::Parse("submission not found"))?;
         let format = self.object_format(repo)?;
         self.submission_validate(repo, &item)?;
+        if item.source_commit == item.target_commit {
+            return Err(GitError::Unavailable(
+                "source and target commits are identical; no integration candidate needed",
+            ));
+        }
         let ins = self.inspect(repo)?;
         let target_path = workspace_target(dest)?;
         let source = Path::new(

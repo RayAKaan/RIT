@@ -105,7 +105,7 @@ fn scoped_mcp_reads_real_repository_and_denies_mutations_and_paths() {
         serde_json::from_str::<serde_json::Value>(&s).unwrap()
     };
     let list = call(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 10);
     let result = call(
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repository.inspect","arguments":{}}}),
     );
@@ -182,5 +182,94 @@ fn rust_client_reads_scoped_repository_through_real_stdio() {
             .is_err()
     );
     drop(input);
+    assert!(child.wait().unwrap().success());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn scoped_mcp_lists_real_managed_checkpoint_submission_and_candidate_records() {
+    use std::{
+        fs,
+        io::{BufRead, BufReader},
+        os::unix::fs::PermissionsExt,
+    };
+    let d = tempfile::tempdir().unwrap();
+    fs::set_permissions(d.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    fs::write(repo.join("app.py"), "value = 1\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let provider = rit_git::Git::discover(None).unwrap();
+    let workspace = provider
+        .workspace_create(&repo, &d.path().join("work"), "source", "HEAD")
+        .unwrap();
+    let work = std::path::Path::new(&workspace.path);
+    fs::write(work.join("feature.py"), "import app\n").unwrap();
+    let checkpoint = provider
+        .content_checkpoint_create(&repo, workspace.id, true, &[])
+        .unwrap();
+    git(work, &["add", "."]);
+    git(work, &["commit", "-qm", "feature"]);
+    let submission = provider
+        .submission_create(&repo, workspace.id, "refs/heads/main")
+        .unwrap();
+    let candidate = provider
+        .candidate_create(&repo, submission.id, &d.path().join("candidate"))
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rit-protocol"))
+        .arg("--repo")
+        .arg(&repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    for (name, field, id) in [
+        ("workspace.list", "reconciliation", workspace.id.to_string()),
+        (
+            "checkpoint.list",
+            "content_checkpoints",
+            checkpoint.manifest.id.to_string(),
+        ),
+        ("submission.list", "submissions", submission.id.to_string()),
+        (
+            "candidate.list",
+            "candidates",
+            candidate.candidate.id.to_string(),
+        ),
+    ] {
+        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}});
+        serde_json::to_writer(&mut stdin, &request).unwrap();
+        stdin.write_all(b"\n").unwrap();
+        stdin.flush().unwrap();
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let data = &response["result"]["structuredContent"];
+        assert!(data[field].to_string().contains(&id), "{name}: {response}");
+        assert_eq!(data["authenticated"], false);
+    }
+    drop(stdin);
     assert!(child.wait().unwrap().success());
 }

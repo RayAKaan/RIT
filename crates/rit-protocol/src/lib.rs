@@ -118,6 +118,7 @@ pub struct ReadOnlyScope {
     repo: std::path::PathBuf,
     common_git_dir: String,
     service: rit_application::GitReadService,
+    git: rit_git::Git,
 }
 impl ReadOnlyScope {
     /// Select a repository once at startup. Tool arguments cannot select another path.
@@ -125,9 +126,8 @@ impl ReadOnlyScope {
         let repo = repo
             .canonicalize()
             .map_err(|_| "cannot access repository path".to_string())?;
-        let service = rit_application::GitReadService::new(
-            rit_git::Git::discover(None).map_err(|_| "Git unavailable".to_string())?,
-        );
+        let git = rit_git::Git::discover(None).map_err(|_| "Git unavailable".to_string())?;
+        let service = rit_application::GitReadService::new(git.clone());
         let ins = service
             .inspect(&repo)
             .map_err(|_| "repository unavailable".to_string())?;
@@ -135,6 +135,7 @@ impl ReadOnlyScope {
             repo,
             common_git_dir: ins.common_git_dir,
             service,
+            git,
         })
     }
     fn call(&self, name: &str) -> Result<Value, ()> {
@@ -157,6 +158,21 @@ impl ReadOnlyScope {
             "dependencies.inspect" => Ok(
                 json!({"schema_version":1,"graph":self.service.dependencies(&self.repo).map_err(|_|())?}),
             ),
+            "workspace.list" => Ok(
+                json!({"schema_version":1,"reconciliation":rit_application::WorkspaceService::new(self.git.clone()).reconcile(&self.repo).map_err(|_|())?,"authenticated":false}),
+            ),
+            "checkpoint.list" => {
+                let service = rit_application::GitCheckpointService::new(self.git.clone());
+                Ok(
+                    json!({"schema_version":1,"content_checkpoints":service.list_content(&self.repo).map_err(|_|())?,"commit_only":service.list(&self.repo).map_err(|_|())?,"authenticated":false}),
+                )
+            }
+            "submission.list" => Ok(
+                json!({"schema_version":1,"submissions":rit_application::submissions::SubmissionService::new(self.git.clone()).list(&self.repo).map_err(|_|())?,"authenticated":false}),
+            ),
+            "candidate.list" => Ok(
+                json!({"schema_version":1,"candidates":rit_application::submissions::SubmissionService::new(self.git.clone()).candidates(&self.repo).map_err(|_|())?,"authenticated":false}),
+            ),
             _ => Err(()),
         }
     }
@@ -165,7 +181,7 @@ fn tool_list(scope: Option<&ReadOnlyScope>) -> Vec<Value> {
     if scope.is_none() {
         return Vec::new();
     }
-    ["repository.inspect","repository.status","repository.branches","repository.history","repository.worktrees","dependencies.inspect"].iter().map(|name|json!({"name":name,"description":"Read-only inspection of the explicitly configured repository; no path arguments.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})).collect()
+    ["repository.inspect","repository.status","repository.branches","repository.history","repository.worktrees","dependencies.inspect","workspace.list","checkpoint.list","submission.list","candidate.list"].iter().map(|name|json!({"name":name,"description":"Read-only inspection of the explicitly configured repository; no path arguments.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})).collect()
 }
 fn error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
