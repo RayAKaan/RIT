@@ -652,3 +652,58 @@ fn read_only_history_supports_sha256_when_available() {
         64
     );
 }
+
+#[test]
+fn real_five_worktrees_support_snapshot_overlap_analysis() {
+    use rit_core::{
+        activity::{Observation, overlaps},
+        repository::RepositoryId,
+        workspace::WorkspaceId,
+    };
+    let d = TempDir::new().unwrap();
+    let root = d.path().join("repository");
+    fs::create_dir(&root).unwrap();
+    run(&root, &["init", "-q"]);
+    fs::write(root.join("shared.txt"), "original\n").unwrap();
+    run(&root, &["add", "--", "shared.txt"]);
+    run(&root, &["commit", "-q", "-m", "initial"]);
+    let git = Git::discover(None).unwrap();
+    let repository = RepositoryId::new();
+    let mut snapshots = Vec::new();
+    for index in 0..5 {
+        let w = d.path().join(format!("workspace-{index}"));
+        run(
+            &root,
+            &["worktree", "add", "-q", "--detach", w.to_str().unwrap()],
+        );
+        fs::write(w.join("shared.txt"), format!("workspace {index}\n")).unwrap();
+        if index == 1 {
+            run(&w, &["add", "--", "shared.txt"]);
+        }
+        let status = git.inspect(&w).unwrap().status.unwrap();
+        snapshots.push(Observation {
+            repository,
+            workspace: Some(WorkspaceId::new()),
+            observed_at: 100,
+            status,
+        });
+    }
+    let result = overlaps(&snapshots, 110, 30).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].path, "shared.txt");
+    assert_eq!(result[0].workspaces.len(), 5);
+    assert_eq!(
+        result[0]
+            .workspaces
+            .iter()
+            .filter(|w| w.staged == Some(true))
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        "original\n"
+    );
+    snapshots.push(snapshots[0].clone());
+    assert!(overlaps(&snapshots, 110, 30).is_err());
+}

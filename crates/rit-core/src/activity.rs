@@ -94,3 +94,84 @@ mod tests {
         assert!(!old.is_stale(40, 30));
     }
 }
+
+/// An exact-path change from one workspace snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceChange {
+    /// Workspace reporting this path.
+    pub workspace: WorkspaceId,
+    /// Git record kind, including untracked and unmerged.
+    pub kind: String,
+    /// Git index reports a change; unavailable for records without XY.
+    pub staged: Option<bool>,
+    /// Git working-tree column reports a change; unavailable for records without XY.
+    pub unstaged: Option<bool>,
+    /// This workspace snapshot is stale relative to the caller's clock and maximum age.
+    pub stale: bool,
+}
+/// Multiple snapshots reporting the same Git path. This is not proof of a merge conflict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileOverlap {
+    /// Exact path from the supplied Git status records, not case-folded or canonicalized.
+    pub path: String,
+    /// Workspaces observed reporting the path.
+    pub workspaces: Vec<WorkspaceChange>,
+}
+/// Compare current snapshots for exact-path overlaps without accessing files or writing storage.
+/// Inputs must cover one repository and have distinct, explicit workspace IDs. A missing overlap
+/// is not evidence that a conflict cannot occur, and rename sources are not matched.
+pub fn overlaps(
+    observations: &[Observation],
+    now: u64,
+    max_age: u64,
+) -> Result<Vec<FileOverlap>, &'static str> {
+    use std::collections::{BTreeMap, HashSet};
+    let mut seen = HashSet::new();
+    let mut repo = None;
+    let mut paths: BTreeMap<&str, Vec<WorkspaceChange>> = BTreeMap::new();
+    for observation in observations {
+        let id = observation.workspace.ok_or("workspace ID required")?;
+        if !seen.insert(id) {
+            return Err("duplicate workspace snapshot");
+        }
+        if let Some(r) = repo {
+            if r != observation.repository {
+                return Err("repository mismatch");
+            }
+        } else {
+            repo = Some(observation.repository)
+        }
+        let mut seen_paths = HashSet::new();
+        for change in &observation.status.changes {
+            if !seen_paths.insert(&change.path) {
+                return Err("duplicate path in snapshot");
+            }
+            let flags = change.xy.as_deref().and_then(|xy| {
+                let b = xy.as_bytes();
+                if b.len() == 2 {
+                    Some((b[0] != b'.', b[1] != b'.'))
+                } else {
+                    None
+                }
+            });
+            paths
+                .entry(&change.path)
+                .or_default()
+                .push(WorkspaceChange {
+                    workspace: id,
+                    kind: change.kind.clone(),
+                    staged: flags.map(|v| v.0),
+                    unstaged: flags.map(|v| v.1),
+                    stale: observation.is_stale(now, max_age),
+                });
+        }
+    }
+    Ok(paths
+        .into_iter()
+        .filter(|(_, values)| values.len() > 1)
+        .map(|(path, workspaces)| FileOverlap {
+            path: path.to_owned(),
+            workspaces,
+        })
+        .collect())
+}
