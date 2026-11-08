@@ -14,6 +14,8 @@ pub mod error;
 pub mod repository;
 /// Pure identity, policy and audit models; not an authentication implementation.
 pub mod security;
+/// Submission and integration preview types.
+pub mod submission;
 pub mod version;
 /// Workspace lifecycle and isolation types.
 pub mod workspace;

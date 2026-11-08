@@ -125,3 +125,19 @@ pub trait CheckpointProvider {
         id: rit_core::checkpoint::CheckpointId,
     ) -> Result<(), CapabilityError>;
 }
+/// Candidate validation and compare-and-swap publication boundary; no implementation exists.
+pub trait IntegrationProvider {
+    /// Preview a submission after authorization; preview does not publish.
+    fn preview(
+        &self,
+        actor: &ActorContext,
+        id: rit_core::submission::SubmissionId,
+    ) -> Result<rit_core::submission::IntegrationPreview, CapabilityError>;
+    /// Publish only after durable checks, approval, recovery and atomic ref-update guarantees.
+    fn publish(
+        &mut self,
+        actor: &ActorContext,
+        id: rit_core::submission::SubmissionId,
+        expected_target: &str,
+    ) -> Result<(), CapabilityError>;
+}

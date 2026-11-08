@@ -103,7 +103,8 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 }
             }
         }
-        Command::Checkpoint { .. }
+        Command::Submission { .. }
+        | Command::Checkpoint { .. }
         | Command::Workspace { .. }
         | Command::Agent { .. }
         | Command::Identity { .. }

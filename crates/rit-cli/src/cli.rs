@@ -62,6 +62,11 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Submission and integration operations (currently unavailable).
+    Submission {
+        #[command(subcommand)]
+        command: SubmissionCommand,
+    },
     /// Checkpoint operations (currently unavailable).
     Checkpoint {
         #[command(subcommand)]
@@ -255,4 +260,16 @@ pub enum CheckpointCommand {
     Preview { id: String },
     /// Restore; disabled.
     Restore { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubmissionCommand {
+    /// Create a submission; disabled.
+    Create { workspace: String },
+    /// List submissions; disabled.
+    List,
+    /// Preview integration; disabled.
+    Preview { id: String },
+    /// Publish a validated candidate; disabled.
+    Publish { id: String },
 }
