@@ -105,3 +105,55 @@ The existing workflow includes Linux/macOS/Windows matrices, but this branch was
 ## 16. Verified starting state for the subsequent recovery directive
 
 The next task started on `phase/02-git-adapter` at `e92c1d4eb12d91329cd55f1014c8feed534e1f64`, with a clean worktree and the reported four-commit ancestry. The restored workspace had no `.git/config` or origin; the specified independent RIT origin was re-added, and its Phase 1 push dry-run again failed exit 128 for missing authentication. Bundled `libsqlite3-sys 0.39.1` contains SQLite 3.54.1; rusqlite is 0.41.1. Connections use SQLite's default VFS. Linux is the only experimental backend and macOS/Windows fail closed. The recovery test was still explicitly ignored. See the living documents `docs/RIT_STATUS.md`, `docs/RIT_DECISIONS.md`, `docs/RIT_TEST_STRATEGY.md`, `docs/RIT_RISK_REGISTER.md`, and subsequent sections of this report for new evidence, not the earlier test results alone.
+
+## 17. Recovery directive follow-up — actual results
+
+**Verdict remains NOT COMPLETE; Phase 3 gate FAIL.** This section records work after the starting-state section. No production identity/recovery protocol or manifest was implemented, because the examined file-identity schemes do not yet establish the exact persistent file binding required before an unrelated file could be opened read-write. This is an unresolved security/data-integrity defect, not a GitHub authentication or native-machine availability stop. No Phase 3 branch or code was created.
+
+### Root cause and evidence
+
+`Registry::open`, `diagnose` and the current legacy adoption sequence perform read-only SQLite content validation before recovery. SQLite 3.54.1 returns `SQLITE_READONLY_ROLLBACK` when a hot journal must be replayed. A required real subprocess test now runs without `#[ignore]`: two records were committed, the separate writer used `journal_mode=delete` and `cache_size=10` to spill dirty pages, was killed with SIGKILL (signal 9), and left a 13,824-byte rollback journal beginning `d9 d5 05 f9 20 a1 63 d7` on tmpfs. Database and journal existed together. The ordinary registry reopen failed `RecoveryBlocked`, so the test **failed** before its subsequent rollback, integrity/FK, new-write and separate clean-restart assertions. These assertions are implemented but not reached and are not claimed to pass. The fixture does not yet prove an independent binding before writable open; that protocol is absent.
+
+A second required test created two distinct clean RIT-marked databases, preserved the first, substituted a copy of the second, and called `Registry::open` on the first path. It returned success even though the database belonged to the second registry. This demonstrates that SQLite `application_id` plus exact schema does not independently identify the original file. The test fails by design until the defect is fixed. Both acceptance tests are now part of the normal test suite; neither is ignored. The code maps `SQLITE_READONLY_ROLLBACK` to `RecoveryBlocked` consistently in `storage verify` and the read-only legacy preflight as well.
+
+### Design and identity investigation
+
+`docs/RIT_DECISIONS.md` records the candidate protected-manifest approach, custom VFS tradeoffs, rejected shortcuts and an explicit proposed initialization/adoption/recovery state machine. It is **not approved or implemented**. One critical issue is stale OS IDs: on the `/home/user` ext4 filesystem a disposable file's `(device,inode)` pair was reused by the next created file after unlink. A manifest bound only to this pair can authorize an unrelated replacement. Windows documentation also says file IDs can be reused. SQLite warns against opening databases through multiple hard links with different journal names and against external database file descriptor close operations while SQLite holds POSIX locks. A same-user malicious process remains outside the application boundary, but accidental replacement is in scope.
+
+An unprivileged Linux `name_to_handle_at` experiment returned opaque handles on tmpfs and ext4, and the two ext4 files with the same reused inode had different handle bytes. This is preliminary evidence only; platform guarantees, filesystem support, mount identity/reuse, privileges, persistence and potential generation reuse are not established. It was not used to authorize SQLite writes. Raw SQLite page/header inspection was not used for identity.
+
+The current legacy-adoption command still lacks an independently bound durable adoption intent, a SQLite backup-API pre-migration backup, interruption recovery and verified backup. It does not meet the new directive. Do not treat it as safe for valuable data; take a SQLite-consistent backup first and do not delete a journal. No independent code review was available or claimed.
+
+### Scope of inspection and platform status
+
+`grep` review located all production SQLite connections in `crates/rit-storage/src/lib.rs`: read-only helper, legacy writable open, registry writable open, `open_readonly` and `diagnose`. Application/CLI reach them via storage services, although CLI repository listing opens storage directly. No explicit journal/WAL deletion, rename or overwrite was found in production code; SQLite itself manages its journals. This search is not an independent security review or proof of all indirect effects. The Linux-only backend remains experimental; macOS and Windows remain fail-closed stubs and their ACL/DACL/reparse/file identity implementations are not done. Native macOS/Windows execution and remote CI have not run. The existing CI matrix now includes explicit Linux recovery and substitution acceptance steps; both are expected to report failures until corrected.
+
+### Commands and results for this follow-up
+
+Environment: Linux x86-64, Git 2.47.3, Rust 1.99.1, Cargo 1.99.1, rusqlite 0.41.1, libsqlite3-sys 0.39.1, bundled SQLite 3.54.1/default VFS. Toolchain and Cargo cache had to be restored after the previous workspace snapshot. The shell used `RUSTUP_HOME=/home/user/.cache/rit-rustup CARGO_HOME=/home/user/.cache/rit-cargo PATH=/home/user/.cache/rit-cargo/bin:$PATH`.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | pass |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | 0 | pass |
+| `cargo test --locked --workspace --all-targets` | **101** | fails required hot-journal recovery test, zero ignored in that target |
+| `cargo test --locked --workspace --all-targets --no-fail-fast` | **101** | 56 tests passed, 2 failed; both recovery and substitution failures visible, 0 ignored; the count includes two no-op subprocess helper entry points |
+| `cargo build --locked --workspace` | 0 | pass |
+| `cargo build --locked --workspace --release` | 0 | pass |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps` | 0 | pass |
+| `cargo test --locked -p rit-storage --test crash_recovery marked_registry_recovers_hot_journal_after_killed_writer -- --nocapture` | **101** | hot-journal evidence above; `RecoveryBlocked` |
+| `cargo test --locked -p rit-storage --test registry refuses_replaced_marked_database_even_if_schema_and_application_id_match -- --nocapture` | **101** | substituted marked database was accepted |
+
+`cargo test --locked --workspace --all-targets` stops at the first failing test binary; `--no-fail-fast` was additionally run to expose both failures, not to conceal the required command's failure. `docs/RIT_TEST_STRATEGY.md` maps threats to controls and test status; `docs/RIT_RISK_REGISTER.md` records remaining critical and high risks. Platform cross-compilation was not rerun in this restored environment; historical results are in §11 and are not native validation.
+
+### Phase 2.1 gate
+
+- [ ] Independently and durably bind the exact DB file before writable recovery; the substitution test currently fails.
+- [ ] Make real hot rollback recovery pass in the required suite and verify rollback, integrity/FKs, writes and restart; the recovery test currently fails.
+- [ ] Implement and test every initialization, manifest, backup, adoption and recovery crash state; no such protocol exists yet.
+- [ ] Implement real reviewed Linux/macOS/Windows security backends and associated ACL/DACL/reparse/replacement tests. Linux is experimental; macOS/Windows are absent.
+- [ ] Establish secure explicit legacy adoption with consistent verified backup and interruption recovery.
+- [ ] Complete threat-to-control adversarial tests, platform-native validation and independent security review.
+- [ ] Re-run the full regression suite with no failing mandatory tests.
+
+**Decision:** stop at this unresolved critical local security and recovery gate. Do not begin Phase 3 or later phases. Preserve the local branch; remote authentication is pending but is not the reason for the security stop.
