@@ -20,4 +20,8 @@ Required future tests include failure injection at every durable manifest/SQLite
 
 ## Later-phase foundations
 
-Unit tests exercise pure state transitions, source-bound activity comparison, non-executable restore/integration previews, conflict evidence, graph traversal and stale revision labeling. `rit-protocol` has a real stdio subprocess denial test; the Python SDK has a stdio interoperability test. These do not prove storage, isolation, authorization or end-to-end safety. The 26-step future acceptance scenario is in `handoff/END_TO_END_PLAN.md`; it has not been executed.
+Unit tests exercise pure state transitions, source-bound activity comparison, non-executable restore/integration previews, conflict evidence, graph traversal and stale revision labeling. `rit-protocol` has a real stdio subprocess denial test; the Python SDK has a stdio interoperability test. These do not prove storage, isolation, authorization or end-to-end safety. The earlier 26-step future scenario has been superseded by the v2 40-step scenario in `handoff/END_TO_END_PLAN.md`; it has not been executed.
+
+## V2 tests and limits
+
+The Git adapter has real SHA-1/SHA-256 ref/history and five-worktree overlap fixtures. Tree-sitter unit tests cover Python, TypeScript and Go static syntax, invalid UTF-8, size limits and parse errors; they do not prove semantic analysis. The modern MCP discovery subset has Rust stdio interoperability, and Python/TypeScript clients have discovery/denial subprocess checks. No authenticated product workflow or 40-step acceptance test was run. Use `PYTHONDONTWRITEBYTECODE=1 RIT_PROTOCOL_BINARY=<built-rit-protocol> python3 -m unittest discover -s sdk/python -p test_interop.py`; typecheck TS with TypeScript 5.7.3 then run `sdk/typescript/test_interop.cjs` with `RIT_TS_CLIENT` and `RIT_PROTOCOL_BINARY`.

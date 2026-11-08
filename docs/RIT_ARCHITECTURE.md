@@ -11,3 +11,7 @@ macOS and Windows registry operations fail closed because real platform backends
 ## Structural additions (not production services)
 
 `rit-core` defines pure security, workspace, observation, checkpoint, submission, conflict, impact and collaboration models; `rit-application::contracts` declares provider boundaries. Existing Phase 2 repository service remains unauthenticated. `rit-protocol` offers stdio discovery only and denies all tool calls. SDKs inject transport and do not supply authentication. There is no durable authority, sandbox, checkpoint restore or publication. The authenticated actor is deliberately non-constructible outside core pending a secure provider design. The audit hash chain needs an independently protected anchor to detect truncation or complete rewrite.
+
+## V2 independent read-only additions
+
+`rit-git` returns validated algorithm-aware Git object IDs for bounded ref and HEAD-history observations. `rit-analysis` uses pinned Tree-sitter grammars against supplied bytes and does not read files or authenticate clients; imports are syntax observations, not resolved graph edges. `rit-core::activity` computes exact-path overlap over supplied workspace snapshots. None is a substitute for a live authenticated service, complete impact analysis or isolation. `rit-protocol` exposes modern discovery subset plus legacy discovery, not privileged tools.
