@@ -1,4 +1,4 @@
-> **V3 status:** See `docs/handoff/FINAL_REPORT.md` (relative to repository root) for current capabilities, blocked storage, and validation; older phase descriptions are historical.
+> **V4 status:** See `docs/handoff/V4_FINAL_REPORT.md` for current capabilities, blocked storage and validation; older phase descriptions are historical.
 
 # RIT
 
@@ -6,7 +6,7 @@ RIT is a planned local-first coordination layer for humans and AI agents working
 
 ## Status
 
-Early development preview (`0.1.0-dev.1`), **not production ready**. V3 adds registry-independent Git inspection, partial committed-source dependency analysis, ephemeral Git activity polling, explicit Linux commit-only checkpoints, and opt-in scoped read-only stdio MCP. Managed workspaces, a real notification watcher, complete checkpoints/restoration, conflict simulation, integration, identity and authorization remain unavailable. The Phase 2.1 storage gate is blocked: writable registry and legacy adoption fail closed at the library boundary, and the experimental read-only registry is unauthenticated. See [the V3 handoff](docs/handoff/FINAL_REPORT.md).
+Early development preview (`0.1.0-dev.1`), **not production ready**. V4 adds bounded Linux Git workspaces, native notifications, partial revision/worktree analysis, isolated merge simulation, incomplete raw-content checkpoints, detached non-publishing integration candidates and scoped read-only MCP. These features are unauthenticated and worktrees are not sandboxes. Workspace removal, checkpoint restore, authenticated approval and protected-ref publication remain disabled. The Phase 2.1 writable registry and legacy adoption remain fail-closed. See [the V4 handoff](docs/handoff/V4_FINAL_REPORT.md).
 ## Build and run
 
 The tested environment is Linux x86-64 with stable Rust 1.99.1. macOS and Windows are CI candidates, not confirmed supported platforms until their checks run. Install Rust using rustup, then from the project root:
@@ -21,7 +21,7 @@ cargo run --locked -p rit-cli -- config validate
 cargo test --locked --workspace --all-targets
 ```
 
-The full workspace test suite currently has 21 failures after the fail-closed registry gate, including both unchanged mandatory Phase 2.1 security tests, which now fail during fixture setup. The pre-gate baseline had two failures at their intended assertions. See [the V3 handoff](docs/handoff/FINAL_REPORT.md).
+The full workspace test suite currently has 21 failures after the fail-closed registry gate, including both unchanged mandatory Phase 2.1 security tests, which now fail during fixture setup. The pre-gate baseline had two failures at their intended assertions. See [the V4 handoff](docs/handoff/V4_FINAL_REPORT.md).
 
 `cargo build` produces `target/debug/rit` (Windows: `target\debug\rit.exe`). No global install is required.
 
@@ -50,4 +50,4 @@ cargo run --locked -p rit-cli -- dependencies inspect --repo /path/to/existing/r
 cargo run --locked -p rit-cli -- activity reconcile --repo /path/to/existing/repo --json
 ```
 
-`rit checkpoint create --repo PATH --commit-only` writes a Git ref for committed HEAD **only**; it does not capture staged, unstaged, untracked, ignored, submodule or LFS contents. Full capture and restore are not implemented. `rit mcp serve --repo PATH` exposes a local opt-in read-only scope, not authenticated authorization or filesystem isolation. Activity is polling, not a notification watcher. Git 2.46+ is required conservatively; only Git 2.47.3/Linux was tested. See [CLI reference](docs/CLI_REFERENCE.md) and [V3 handoff](docs/handoff/FINAL_REPORT.md).
+`rit checkpoint create --repo PATH --workspace ID` captures a bounded, non-atomic raw index/worktree observation; untracked and ignored inclusion is explicit. It is incomplete, may persist secrets and cannot be restored. `--commit-only` captures committed HEAD only. `rit mcp serve --repo PATH` is local, opt-in and read-only, not authenticated authorization or filesystem isolation. Activity offers native notifications as well as snapshot reconciliation; events can be lost. Git 2.46+ is required conservatively; only Git 2.47.3/Linux x86-64 was tested. See [CLI reference](docs/CLI_REFERENCE.md) and [V4 handoff](docs/handoff/V4_FINAL_REPORT.md).

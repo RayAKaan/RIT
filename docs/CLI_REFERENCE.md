@@ -1,3 +1,5 @@
+> **V4 update:** Current capabilities, validation and limitations are in [V4_FINAL_REPORT.md](handoff/V4_FINAL_REPORT.md). Older statements below are historical; stable blocker IDs remain open.
+
 # CLI reference — V3 development preview
 
 Use `rit --help` and subcommand help. Global flags include `--data-dir` and `--git-executable`; the latter wins over `RIT_GIT_EXECUTABLE`. Git >=2.46 is conservatively required (only Linux Git 2.47.3 tested). Output supports `--json`; Unicode-only paths/status are currently supported. Exit 4 indicates runtime/unavailable.

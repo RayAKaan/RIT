@@ -253,12 +253,12 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Validated workspace operations and OS isolation",
-      "evidence": "Only models, interfaces and blocked CLI exist",
+      "evidence": "V4 creates, lists, inspects, locks, unlocks and reconciles five genuinely RIT-created Git worktrees on Linux x86-64; safe no-checkout fallback works. Removal, reviewed OS isolation, native platforms and crash/race completeness remain unavailable.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "interim_behavior": "Only bounded cooperative worktrees; no removal, arbitrary execution or sandbox claim. Git manifests are unauthenticated.",
       "required_remediation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits",
       "acceptance_criteria": "Native isolation escape/resource/cleanup tests",
       "verification": "Native isolation escape/resource/cleanup tests",
@@ -277,12 +277,12 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Activity source and reconciliation",
-      "evidence": "V3 provides real bounded finite Git status polling and exact-path overlap across worktrees; a five Git-created-worktree test passes. Native notifications and event history remain absent.",
+      "evidence": "V4 notify watcher observes concurrent edits in five RIT-created worktrees; bounded buffer, overflow and restart tested. Native stage/commit/branch events, durable history and non-Linux validation remain incomplete.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Ephemeral polling only; can miss intermediate changes and cannot prove no conflict.",
+      "interim_behavior": "Live notifications and reconciliation are ephemeral, may lose events, and cannot prove conflict or actor identity.",
       "required_remediation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation",
       "acceptance_criteria": "Real Git changes, restart and event-loss tests",
       "verification": "Real Git changes, restart and event-loss tests",
@@ -301,12 +301,12 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Safe capture, restore and retention",
-      "evidence": "Linux-only opt-in commit-only Git ref capture/list/fsck works; no staged, unstaged, untracked, ignored, submodule or LFS coverage and no restore.",
+      "evidence": "V4 persists bounded raw index/worktree, opted-in untracked and selected ignored files, symlinks, executable bits, deletions and unmerged stages in reachable Git objects; integrity, GC and size refusal tested. Complete atomic capture, submodule/LFS, authenticated metadata and restore absent.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-001"
       ],
-      "interim_behavior": "Require --commit-only; never treat a Git commit ref as a full protective checkpoint.",
+      "interim_behavior": "Always incomplete/non-atomic, files may be sensitive; restore and deletion disabled.",
       "required_remediation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies",
       "acceptance_criteria": "Disposable Git integration, crash, conflict and special-file tests",
       "verification": "Disposable Git integration, crash, conflict and special-file tests",
@@ -325,12 +325,12 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Queue and atomic ref publication",
-      "evidence": "Only advisory pure preview and contracts",
+      "evidence": "V4 Git-ref-backed submission and detached candidate merge commit/worktree, stale target detection and partial static validation work locally. No protected target publication, authentication, queue or crash-safe recovery.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "interim_behavior": "No approval, execution or publication; candidate and metadata are not isolated/authenticated.",
       "required_remediation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation",
       "acceptance_criteria": "Concurrent target changes, retries, source preservation and failure injection",
       "verification": "Concurrent target changes, retries, source preservation and failure injection",
@@ -349,12 +349,12 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Semantic conflict analysis",
-      "evidence": "Only native status evidence and semantic adapter types",
+      "evidence": "V4 real isolated-object merge-tree produces stages, messages, changed paths and partial syntax evidence without mutating source/target; merge drivers refused. Semantic and comprehensive case coverage remain incomplete.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "interim_behavior": "Advisory only; no resolution, Mergiraf or automatic apply.",
       "required_remediation": "Implement tested tree-sitter/Mergiraf adapters, text conflict analysis and human review",
       "acceptance_criteria": "Language fixtures and no-overwrite integration tests",
       "verification": "Language fixtures and no-overwrite integration tests",
@@ -373,12 +373,12 @@
       "severity": "medium",
       "status": "deferred",
       "title": "Evidence extraction and impact coverage",
-      "evidence": "V3 analyzes committed HEAD blobs with bounded Python/TypeScript/Go Tree-sitter import extraction, conservative Python/TS resolution and reverse impact; graph remains partial and Go unresolved.",
+      "evidence": "V4 snapshots selected commits/branches and bounded live workspace sources; partial Python/TS/Go resolution, evidence, cycles and impact work. Full language/symbol semantics and cache invalidation absent.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Treat unknown edges and incomplete graph as uncertainty, not evidence of safety.",
+      "interim_behavior": "Graphs report incomplete, live observations non-atomic and staleable.",
       "required_remediation": "Implement versioned source extraction, symbol/API mapping and test/workspace recommendations",
       "acceptance_criteria": "Real repository fixtures, stale/partial evidence and language coverage tests",
       "verification": "Real repository fixtures, stale/partial evidence and language coverage tests",
@@ -397,12 +397,12 @@
       "severity": "critical",
       "status": "deferred",
       "title": "Authenticated privileged tool routes",
-      "evidence": "Six read-only app-backed scoped stdio MCP tools now work; no authenticated or privileged routes.",
+      "evidence": "Ten read-only scoped stdio MCP views, including workspace/checkpoint/submission/candidate listing, pass local real-record tests. No authenticated or privileged routes.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-SEC-009"
       ],
-      "interim_behavior": "Explicit same-OS-user opt-in only; no path arguments, mutation or HTTP. Scope is not OS sandbox/authentication.",
+      "interim_behavior": "Explicit same-OS-user scope only; no caller-supplied paths, mutation, execution or HTTP; not authentication/sandbox.",
       "required_remediation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs",
       "acceptance_criteria": "Adversarial authorization and Rust/TS/Python interoperability tests",
       "verification": "Adversarial authorization and Rust/TS/Python interoperability tests",
@@ -469,7 +469,7 @@
       "severity": "medium",
       "status": "deferred",
       "title": "TypeScript validation and interoperability",
-      "evidence": "Rust/Python/TypeScript clients exercise real scoped read and denial over stdio; official full conformance and authenticated product SDK operations absent.",
+      "evidence": "Rust, Python and TypeScript clients exercise scoped stdio reads and denial, including new views; no authenticated product SDK or official conformance.",
       "root_cause": "Provider and implementation or verification not yet delivered.",
       "dependencies": [
         "RIT-P10-001"
@@ -590,12 +590,12 @@
       "severity": "high",
       "status": "deferred",
       "title": "MCP modern/legacy discovery subset is not full conformance",
-      "evidence": "Legacy/modern discovery subset plus six scoped read-only tools; full base message-pattern and official conformance suite still absent.",
+      "evidence": "Legacy/modern discovery subset and ten scoped read-only views; full base protocol and official conformance suite remain absent.",
       "root_cause": "Protocol server is a bounded partial prototype.",
       "dependencies": [
         "RIT-P10-001"
       ],
-      "interim_behavior": "Do not claim MCP conformance or advertise privileged tools as available.",
+      "interim_behavior": "Do not claim full MCP conformance or privileged access.",
       "required_remediation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
       "required_implementation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
       "acceptance_criteria": "Version negotiation, errors, notifications, cancellation and real official-client interoperability tests pass.",
@@ -606,6 +606,81 @@
       "files": [
         "crates/rit-protocol/src/lib.rs"
       ]
+    },
+    {
+      "id": "RIT-V4-001",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Git child-process restrictions and native portability",
+      "evidence": "Status, diff, worktree, checkpoint and merge mitigations rely on Linux x86-64 seccomp and trusted setpriv; no independent security review or native platform testing.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Adversarially review and test process restrictions and safe alternatives on Linux, Windows and macOS; retain fail-closed behavior.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Adversarially review and test process restrictions and safe alternatives on Linux, Windows and macOS; retain fail-closed behavior."
+    },
+    {
+      "id": "RIT-V4-002",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Unauthenticated Git metadata and same-user races",
+      "evidence": "Workspace, checkpoint, submission and candidate refs can be edited by the repository owner; same-user and filesystem races are not independently reviewed.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Establish authenticated coordination and protected audit with reviewed crash-safe identity, or continue to describe data as unauthenticated and non-sandboxed.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Establish authenticated coordination and protected audit with reviewed crash-safe identity, or continue to describe data as unauthenticated and non-sandboxed."
+    },
+    {
+      "id": "RIT-V4-003",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Incomplete integration candidate recovery",
+      "evidence": "Interrupted creation can leave manifests, refs, object data and directories; candidate creation and static checks are not transactional.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance."
     }
   ]
 }
