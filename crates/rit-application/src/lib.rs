@@ -195,3 +195,55 @@ pub fn annotate_locations(repositories: Vec<Repository>) -> Vec<RepositoryListin
         })
         .collect()
 }
+
+/// Direct read-only Git application service; does not access a RIT registry or authenticate actors.
+pub struct GitReadService {
+    git: Git,
+}
+impl GitReadService {
+    /// Construct a service from the configured Git adapter.
+    pub fn new(git: Git) -> Self {
+        Self { git }
+    }
+    /// Inspect an explicit Git repository path.
+    pub fn inspect(&self, path: &Path) -> Result<Inspection, ApplicationError> {
+        Ok(self.git.inspect(path)?)
+    }
+    /// Obtain the tracked and untracked working-tree status.
+    pub fn status(&self, path: &Path) -> Result<rit_core::repository::Status, ApplicationError> {
+        self.inspect(path)?
+            .status
+            .ok_or(ApplicationError::Git(GitError::Parse(
+                "bare repository has no working tree",
+            )))
+    }
+    /// Obtain refs.
+    pub fn references(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<rit_core::git_object::GitReference>, ApplicationError> {
+        Ok(self.git.references(path)?)
+    }
+    /// Obtain bounded HEAD history.
+    pub fn history(
+        &self,
+        path: &Path,
+        limit: u32,
+    ) -> Result<Vec<rit_core::git_object::GitCommit>, ApplicationError> {
+        Ok(self.git.history(path, limit)?)
+    }
+    /// Obtain Git worktree inventory.
+    pub fn worktrees(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<rit_core::git_object::WorktreeRecord>, ApplicationError> {
+        Ok(self.git.worktrees(path)?)
+    }
+    /// Obtain staged and unstaged tracked file differences.
+    pub fn diff(
+        &self,
+        path: &Path,
+    ) -> Result<rit_core::git_object::DiffObservation, ApplicationError> {
+        Ok(self.git.diff(path)?)
+    }
+}

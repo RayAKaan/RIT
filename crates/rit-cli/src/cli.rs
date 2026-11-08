@@ -131,6 +131,48 @@ pub enum Command {
 }
 #[derive(Debug, Subcommand)]
 pub enum RepositoryCommand {
+    /// Inspect Git by explicit path without registry access.
+    Inspect {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect worktree status by explicit path without registry access.
+    Status {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect lightweight and annotated tags.
+    Tags {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect Git worktree inventory.
+    Worktrees {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect tracked staged and unstaged file differences.
+    Diff {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect repository health via Git's read-only discovery.
+    Doctor {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// List branches and remote-tracking branches directly from Git; no registry required.
     Branches {
         #[arg(default_value = ".")]

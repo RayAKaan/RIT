@@ -109,9 +109,10 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             rit_application::contracts::CapabilityError::StorageUnverified.to_string(),
         )),
         Command::Inspect { path, json } => {
-            let git =
-                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            let ins = git
+            let service = rit_application::GitReadService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let ins = service
                 .inspect(&path)
                 .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
             output::value(
@@ -121,51 +122,66 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
             .map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Repository {
-            command: RepositoryCommand::Branches { path, json },
+            command:
+                command @ (RepositoryCommand::Inspect { .. }
+                | RepositoryCommand::Status { .. }
+                | RepositoryCommand::Branches { .. }
+                | RepositoryCommand::Tags { .. }
+                | RepositoryCommand::Refs { .. }
+                | RepositoryCommand::Log { .. }
+                | RepositoryCommand::Worktrees { .. }
+                | RepositoryCommand::Diff { .. }
+                | RepositoryCommand::Doctor { .. }),
         } => {
-            let git =
-                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            let refs = git
-                .references(&path)
-                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?
-                .into_iter()
-                .filter(|r| {
-                    r.name.starts_with("refs/heads/") || r.name.starts_with("refs/remotes/")
-                })
-                .collect::<Vec<_>>();
-            output::value(
-                &serde_json::json!({"schema_version":1,"references":refs}),
-                json,
-            )
-            .map_err(|e| (RUNTIME_FAILURE, e))
-        }
-        Command::Repository {
-            command: RepositoryCommand::Refs { path, json },
-        } => {
-            let git =
-                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            let refs = git
-                .references(&path)
-                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            output::value(
-                &serde_json::json!({"schema_version":1,"references":refs}),
-                json,
-            )
-            .map_err(|e| (RUNTIME_FAILURE, e))
-        }
-        Command::Repository {
-            command: RepositoryCommand::Log { path, limit, json },
-        } => {
-            let git =
-                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            let commits = git
-                .history(&path, limit)
-                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
-            output::value(
-                &serde_json::json!({"schema_version":1,"commits":commits}),
-                json,
-            )
-            .map_err(|e| (RUNTIME_FAILURE, e))
+            let service = rit_application::GitReadService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let fail = |e: rit_application::ApplicationError| (RUNTIME_FAILURE, e.to_string());
+            let (result, json) = match command {
+                RepositoryCommand::Inspect { path, json } => (
+                    serde_json::json!({"schema_version":1,"inspection":service.inspect(&path).map_err(fail)?}),
+                    json,
+                ),
+                RepositoryCommand::Doctor { path, json } => (
+                    serde_json::json!({"schema_version":1,"inspection":service.inspect(&path).map_err(fail)?,"security_gate":"blocked_phase_2_1","health":"validation_pending"}),
+                    json,
+                ),
+                RepositoryCommand::Status { path, json } => (
+                    serde_json::json!({"schema_version":1,"status":service.status(&path).map_err(fail)?}),
+                    json,
+                ),
+                RepositoryCommand::Worktrees { path, json } => (
+                    serde_json::json!({"schema_version":1,"worktrees":service.worktrees(&path).map_err(fail)?}),
+                    json,
+                ),
+                RepositoryCommand::Diff { path, json } => (
+                    serde_json::json!({"schema_version":1,"diff":service.diff(&path).map_err(fail)?}),
+                    json,
+                ),
+                RepositoryCommand::Branches { path, json } => (
+                    serde_json::json!({"schema_version":1,"references":service.references(&path).map_err(fail)?.into_iter().filter(|r|r.name.starts_with("refs/heads/")||r.name.starts_with("refs/remotes/")).collect::<Vec<_>>()}),
+                    json,
+                ),
+                RepositoryCommand::Tags { path, json } => (
+                    serde_json::json!({"schema_version":1,"references":service.references(&path).map_err(fail)?.into_iter().filter(|r|r.name.starts_with("refs/tags/")).collect::<Vec<_>>()}),
+                    json,
+                ),
+                RepositoryCommand::Refs { path, json } => (
+                    serde_json::json!({"schema_version":1,"references":service.references(&path).map_err(fail)?}),
+                    json,
+                ),
+                RepositoryCommand::Log { path, limit, json } => (
+                    serde_json::json!({"schema_version":1,"commits":service.history(&path,limit).map_err(fail)?}),
+                    json,
+                ),
+                _ => {
+                    return Err((
+                        INTERNAL_FAILURE,
+                        "unexpected read-only repository command".into(),
+                    ));
+                }
+            };
+            output::value(&result, json).map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Repository {
             command: RepositoryCommand::List { json },

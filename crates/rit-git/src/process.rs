@@ -398,6 +398,140 @@ impl Git {
         rit_core::git_object::ObjectFormat::parse(&value)
             .ok_or(GitError::Parse("unsupported object format"))
     }
+    /// Inspect Git worktree inventory with NUL-delimited porcelain output.
+    pub fn worktrees(
+        &self,
+        input: &Path,
+    ) -> Result<Vec<rit_core::git_object::WorktreeRecord>, GitError> {
+        use rit_core::git_object::{ObjectId, WorktreeRecord};
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let format = self.object_format(&cwd)?;
+        let args = ["worktree", "list", "--porcelain", "-z"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let bytes = self.run(Some(&cwd), &args, "worktree inventory")?;
+        if !bytes.ends_with(&[0, 0]) {
+            return Err(GitError::Parse("worktree terminator"));
+        }
+        let mut records = Vec::new();
+        for record in bytes
+            .split(|b| *b == 0)
+            .collect::<Vec<_>>()
+            .split(|part| part.is_empty())
+        {
+            if record.is_empty() {
+                continue;
+            }
+            let mut path = None;
+            let mut head = None;
+            let mut branch = None;
+            let mut detached = false;
+            let mut bare = false;
+            let mut locked = false;
+            let mut prunable = false;
+            for raw in record {
+                let item = std::str::from_utf8(raw).map_err(|_| GitError::NonUnicode)?;
+                if let Some(value) = item.strip_prefix("worktree ") {
+                    if path.replace(value.to_owned()).is_some() {
+                        return Err(GitError::Parse("duplicate worktree path"));
+                    }
+                } else if let Some(value) = item.strip_prefix("HEAD ") {
+                    if value.bytes().all(|b| b == b'0') {
+                        head = None
+                    } else {
+                        head = Some(ObjectId::new(format, value).map_err(GitError::Parse)?);
+                    }
+                } else if let Some(value) = item.strip_prefix("branch ") {
+                    branch = Some(value.to_owned())
+                } else if item == "detached" {
+                    detached = true
+                } else if item == "bare" {
+                    bare = true
+                } else if item == "locked" || item.starts_with("locked ") {
+                    locked = true
+                } else if item == "prunable" || item.starts_with("prunable ") {
+                    prunable = true
+                } else {
+                    return Err(GitError::Parse("unknown worktree record"));
+                }
+            }
+            records.push(WorktreeRecord {
+                path: path
+                    .filter(|x| !x.is_empty())
+                    .ok_or(GitError::Parse("missing worktree path"))?,
+                head,
+                branch,
+                detached,
+                bare,
+                locked,
+                prunable,
+            });
+        }
+        Ok(records)
+    }
+    /// Inspect staged and unstaged tracked file differences without invoking diff drivers.
+    pub fn diff(&self, input: &Path) -> Result<rit_core::git_object::DiffObservation, GitError> {
+        use rit_core::git_object::{DiffObservation, FileDifference};
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let ins = self.inspect(&cwd)?;
+        if ins.bare {
+            return Err(GitError::Parse("bare repository has no working tree"));
+        }
+        let query = |staged: bool| -> Result<Vec<FileDifference>, GitError> {
+            let mut args = vec![
+                OsString::from("diff"),
+                OsString::from("--no-ext-diff"),
+                OsString::from("--no-textconv"),
+                OsString::from("--no-renames"),
+                OsString::from("--name-status"),
+                OsString::from("-z"),
+            ];
+            if staged {
+                args.push(OsString::from("--cached"));
+            }
+            args.push(OsString::from("--"));
+            let bytes = self.run(Some(&cwd), &args, "diff")?;
+            if bytes.is_empty() {
+                return Ok(Vec::new());
+            }
+            if !bytes.ends_with(&[0]) {
+                return Err(GitError::Parse("diff terminator"));
+            }
+            let mut fields = bytes.split(|b| *b == 0);
+            let mut out = Vec::new();
+            while let Some(kind) = fields.next() {
+                if kind.is_empty() {
+                    break;
+                }
+                let path = fields
+                    .next()
+                    .filter(|v| !v.is_empty())
+                    .ok_or(GitError::Parse("diff path"))?;
+                let status = std::str::from_utf8(kind).map_err(|_| GitError::NonUnicode)?;
+                if status.len() != 1 || !"ACDMRTUXB".contains(status) {
+                    return Err(GitError::Parse("diff status"));
+                }
+                out.push(FileDifference {
+                    status: status.into(),
+                    path: std::str::from_utf8(path)
+                        .map_err(|_| GitError::NonUnicode)?
+                        .into(),
+                });
+            }
+            Ok(out)
+        };
+        Ok(DiffObservation {
+            staged: query(true)?,
+            unstaged: query(false)?,
+        })
+    }
     /// Inspect an existing repository without registering or modifying it.
     pub fn inspect(&self, input: &Path) -> Result<Inspection, GitError> {
         let cwd = input.canonicalize().map_err(|source| GitError::Path {

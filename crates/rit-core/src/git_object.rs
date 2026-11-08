@@ -113,3 +113,38 @@ mod tests {
         );
     }
 }
+
+/// Git's current worktree inventory record, not a security boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeRecord {
+    /// Git-reported path.
+    pub path: String,
+    /// HEAD object ID, or None for an unborn branch.
+    pub head: Option<ObjectId>,
+    /// Git-reported full branch ref.
+    pub branch: Option<String>,
+    /// Whether HEAD is detached.
+    pub detached: bool,
+    /// Whether this is a bare repository entry.
+    pub bare: bool,
+    /// Whether Git reports a worktree lock.
+    pub locked: bool,
+    /// Whether Git reports this entry as prunable (no deletion is performed).
+    pub prunable: bool,
+}
+/// One Git-reported tracked file difference; paths are relative to the repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDifference {
+    /// Raw Git status code.
+    pub status: String,
+    /// Path relative to the worktree.
+    pub path: String,
+}
+/// Index-versus-HEAD and worktree-versus-index changes; untracked files are not included.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffObservation {
+    /// Staged tracked differences.
+    pub staged: Vec<FileDifference>,
+    /// Unstaged tracked differences.
+    pub unstaged: Vec<FileDifference>,
+}

@@ -248,3 +248,75 @@ fn legacy_adoption_cli_fails_closed_without_creating_storage() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("legacy adoption requires"));
     assert!(!data.exists());
 }
+
+#[test]
+fn repository_read_commands_use_real_git_without_registry() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let data = d.path().join("no-registry");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("source.txt"), "base\n").unwrap();
+    git(&["add", "--", "source.txt"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["tag", "v1"]);
+    std::fs::write(repo.join("source.txt"), "changed\n").unwrap();
+    for cmd in [
+        "inspect",
+        "status",
+        "branches",
+        "tags",
+        "log",
+        "diff",
+        "refs",
+        "worktrees",
+        "doctor",
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .arg("--data-dir")
+            .arg(&data)
+            .args(["repo", cmd])
+            .arg(&repo)
+            .arg("--json")
+            .env("XDG_CONFIG_HOME", d.path().join("config"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["schema_version"], 1);
+        if cmd == "diff" {
+            assert_eq!(v["diff"]["unstaged"][0]["path"], "source.txt");
+        }
+        if cmd == "tags" {
+            assert_eq!(v["references"][0]["name"], "refs/tags/v1");
+        }
+        if cmd == "worktrees" {
+            assert_eq!(v["worktrees"].as_array().unwrap().len(), 1);
+        }
+        if cmd == "doctor" {
+            assert_eq!(v["security_gate"], "blocked_phase_2_1");
+        }
+        assert!(!data.exists());
+    }
+}

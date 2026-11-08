@@ -707,3 +707,36 @@ fn real_five_worktrees_support_snapshot_overlap_analysis() {
     snapshots.push(snapshots[0].clone());
     assert!(overlaps(&snapshots, 110, 30).is_err());
 }
+
+#[test]
+fn worktree_inventory_and_tracked_diff_are_read_only() {
+    let d = TempDir::new().unwrap();
+    let root = d.path().join("source");
+    let w = d.path().join("linked");
+    fs::create_dir(&root).unwrap();
+    run(&root, &["init", "-q"]);
+    fs::write(root.join("file name"), "base\n").unwrap();
+    run(&root, &["add", "--", "file name"]);
+    run(&root, &["commit", "-q", "-m", "first"]);
+    run(
+        &root,
+        &["worktree", "add", "-q", "--detach", w.to_str().unwrap()],
+    );
+    fs::write(root.join("file name"), "work\n").unwrap();
+    let git = Git::discover(None).unwrap();
+    let inventory = git.worktrees(&root).unwrap();
+    assert_eq!(inventory.len(), 2);
+    assert!(
+        inventory
+            .iter()
+            .any(|x| x.detached && x.path == w.to_str().unwrap())
+    );
+    let diff = git.diff(&root).unwrap();
+    assert_eq!(diff.unstaged.len(), 1);
+    assert_eq!(diff.unstaged[0].path, "file name");
+    assert!(diff.staged.is_empty());
+    run(&root, &["add", "--", "file name"]);
+    let diff = git.diff(&root).unwrap();
+    assert_eq!(diff.staged.len(), 1);
+    assert!(diff.unstaged.is_empty());
+}
