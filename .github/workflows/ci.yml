@@ -22,6 +22,12 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --locked --workspace --all-targets
+      - name: Hot-journal recovery acceptance (Linux)
+        if: ${{ always() && matrix.os == 'ubuntu-latest' }}
+        run: cargo test --locked -p rit-storage --test crash_recovery marked_registry_recovers_hot_journal_after_killed_writer -- --nocapture
+      - name: Database substitution acceptance (Linux)
+        if: ${{ always() && matrix.os == 'ubuntu-latest' }}
+        run: cargo test --locked -p rit-storage --test registry refuses_replaced_marked_database_even_if_schema_and_application_id_match -- --nocapture
       - name: Build
         run: cargo build --locked --workspace
       - name: Release build
