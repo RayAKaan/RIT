@@ -375,6 +375,7 @@ dependencies = [
  "rit-core",
  "rit-git",
  "rit-storage",
+ "serde",
  "thiserror",
 ]
 

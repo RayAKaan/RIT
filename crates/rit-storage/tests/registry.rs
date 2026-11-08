@@ -120,3 +120,90 @@ fn locked_database_returns_an_error_without_losing_rows() {
     assert_eq!(registry.get(record.id).unwrap().unwrap().locations.len(), 1);
     assert_eq!(registry.list().unwrap().len(), 1);
 }
+#[cfg(unix)]
+#[test]
+fn refuses_symlink_database_without_mutating_target() {
+    use std::os::unix::fs::symlink;
+    let d = TempDir::new().unwrap();
+    let target = d.path().join("victim.sqlite");
+    let data = d.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    {
+        let c = rusqlite::Connection::open(&target).unwrap();
+        c.execute_batch(
+            "CREATE TABLE unrelated(value TEXT); INSERT INTO unrelated VALUES('keep');",
+        )
+        .unwrap();
+    }
+    symlink(&target, data.join("rit.sqlite3")).unwrap();
+    assert!(Registry::open(&data).is_err());
+    assert!(diagnose(&data).is_err());
+    let c = rusqlite::Connection::open(&target).unwrap();
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row("SELECT value FROM unrelated", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "keep"
+    );
+    let n: i64 = c
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name='repositories'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
+}
+#[test]
+fn rejects_unrelated_unversioned_database_without_mutation() {
+    let d = TempDir::new().unwrap();
+    let p = d.path().join("rit.sqlite3");
+    {
+        let c = rusqlite::Connection::open(&p).unwrap();
+        c.execute_batch(
+            "CREATE TABLE unrelated(value TEXT); INSERT INTO unrelated VALUES('keep');",
+        )
+        .unwrap();
+    }
+    assert!(matches!(
+        Registry::open(d.path()),
+        Err(StorageError::UnrecognizedDatabase)
+    ));
+    let c = rusqlite::Connection::open(p).unwrap();
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row("SELECT value FROM unrelated", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "keep"
+    );
+}
+#[cfg(unix)]
+#[test]
+fn refuses_existing_hard_link_to_registry() {
+    let d = TempDir::new().unwrap();
+    let first = d.path().join("first");
+    let alias = d.path().join("alias");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&alias).unwrap();
+    let mut registry = Registry::open(&first).unwrap();
+    registry.register(&sample("/one", "/common"), None).unwrap();
+    drop(registry);
+    std::fs::hard_link(first.join("rit.sqlite3"), alias.join("rit.sqlite3")).unwrap();
+    assert!(matches!(
+        Registry::open(&alias),
+        Err(StorageError::HardLinkedDatabase)
+    ));
+    let conn = rusqlite::Connection::open(first.join("rit.sqlite3")).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM repositories", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}

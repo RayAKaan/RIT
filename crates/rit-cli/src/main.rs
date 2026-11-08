@@ -104,7 +104,7 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 None => Vec::new(),
             };
             output::value(
-                &serde_json::json!({"schema_version":1,"repositories":repos}),
+                &serde_json::json!({"schema_version":1,"repositories":rit_application::annotate_locations(repos)}),
                 json,
             )
             .map_err(|e| (RUNTIME_FAILURE, e))

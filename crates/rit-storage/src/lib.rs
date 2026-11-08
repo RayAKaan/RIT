@@ -1,7 +1,7 @@
 //! SQLite-backed local registry of repositories, not source history.
 #![forbid(unsafe_code)]
 use rit_core::repository::{Inspection, Location, Repository, RepositoryId};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -21,6 +21,12 @@ pub enum StorageError {
     /// Database schema is newer than this executable supports.
     #[error("unsupported registry schema version {0}; upgrade RIT")]
     FutureSchema(i64),
+    /// A database with multiple hard links can alias another registry and its journals.
+    #[error("refusing database with multiple hard links")]
+    HardLinkedDatabase,
+    /// A version-zero database has unrelated schema and cannot be initialized safely.
+    #[error("refusing to initialize a non-empty unrecognized SQLite database")]
+    UnrecognizedDatabase,
     /// The local system clock is not valid.
     #[error("system clock is before Unix epoch or out of range")]
     Clock,
@@ -75,7 +81,25 @@ impl Registry {
     /// Create/open the database and transactionally migrate schema 0 to schema 1.
     pub fn open(dir: &Path) -> Result<Self, StorageError> {
         fs::create_dir_all(dir)?;
-        let mut c = Connection::open(dir.join("rit.sqlite3"))?;
+        // Defense in depth only: this pathname check cannot bind SQLite's later open
+        // to the same inode. See the transition report for the unresolved race.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match fs::symlink_metadata(dir.join("rit.sqlite3")) {
+                Ok(metadata) if metadata.nlink() > 1 => {
+                    return Err(StorageError::HardLinkedDatabase);
+                }
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+        let mut c = Connection::open_with_flags(
+            dir.join("rit.sqlite3"),
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", "ON")?;
         c.pragma_update(None, "synchronous", "FULL")?;
@@ -85,6 +109,14 @@ impl Registry {
             return Err(StorageError::FutureSchema(version));
         }
         if version == 0 {
+            let objects: i64 = t.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )?;
+            if objects != 0 {
+                return Err(StorageError::UnrecognizedDatabase);
+            }
             t.execute_batch("CREATE TABLE repositories (id TEXT PRIMARY KEY NOT NULL, common_git_dir TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL CHECK(length(trim(display_name))>0), object_format TEXT NOT NULL, is_bare INTEGER NOT NULL CHECK(is_bare IN (0,1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE repository_locations (id INTEGER PRIMARY KEY, repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE, path TEXT NOT NULL UNIQUE, git_dir TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('worktree','bare')), first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL); PRAGMA user_version=1;")?;
         }
         t.commit()?;
@@ -99,7 +131,7 @@ impl Registry {
         }
         let c = Connection::open_with_flags(
             dir.join("rit.sqlite3"),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         c.busy_timeout(Duration::from_secs(5))?;
         c.pragma_update(None, "foreign_keys", "ON")?;
@@ -222,12 +254,15 @@ impl Registry {
 /// Returns `None` when it has not been initialized.
 pub fn diagnose(dir: &Path) -> Result<Option<i64>, StorageError> {
     let path = dir.join("rit.sqlite3");
-    match fs::metadata(&path) {
+    match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(StorageError::Io(e)),
         Ok(_) => {}
     }
-    let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let c = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
     c.busy_timeout(Duration::from_secs(5))?;
     let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if v > 1 {
@@ -238,4 +273,23 @@ pub fn diagnose(dir: &Path) -> Result<Option<i64>, StorageError> {
         return Err(StorageError::Sql(rusqlite::Error::InvalidQuery));
     }
     Ok(Some(v))
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    #[test]
+    fn actual_registry_connection_enforces_foreign_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = Registry::open(tmp.path()).unwrap();
+        let enabled: i64 = registry
+            .connection
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(enabled, 1);
+        let result=registry.connection.execute("INSERT INTO repository_locations(repository_id,path,git_dir,kind,first_seen_at,last_seen_at) VALUES('missing','p','g','worktree',0,0)",[]);
+        assert!(
+            matches!(result,Err(rusqlite::Error::SqliteFailure(ref e,_)) if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY)
+        );
+    }
 }

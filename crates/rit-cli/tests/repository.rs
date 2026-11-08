@@ -253,3 +253,24 @@ fn listing_uninitialized_registry_does_not_write_into_repository() {
     assert!(result["repositories"].as_array().unwrap().is_empty());
     assert!(!data.exists());
 }
+#[test]
+fn listing_marks_a_removed_location_missing() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let data = temp.path().join("data");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    let result = json(&rit(&data, &["init", repo.to_str().unwrap(), "--json"]));
+    assert!(result["created"].as_bool().unwrap());
+    let before = json(&rit(&data, &["repository", "list", "--json"]));
+    assert_eq!(
+        before["repositories"][0]["location_availability"][0]["state"],
+        "present_unverified"
+    );
+    fs::remove_dir_all(&repo).unwrap();
+    let after = json(&rit(&data, &["repository", "list", "--json"]));
+    assert_eq!(
+        after["repositories"][0]["location_availability"][0]["state"],
+        "missing"
+    );
+}

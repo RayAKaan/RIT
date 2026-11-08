@@ -143,3 +143,49 @@ fn resolve_future_path(path: &Path) -> Result<PathBuf, ApplicationError> {
     }
     Ok(resolved)
 }
+
+/// A persisted repository accompanied by non-authoritative current path observations.
+#[derive(serde::Serialize)]
+pub struct RepositoryListing {
+    /// Persisted record; it is not live Git truth.
+    #[serde(flatten)]
+    pub repository: Repository,
+    /// Current filesystem-only state of each recorded location, in matching order.
+    pub location_availability: Vec<LocationAvailability>,
+}
+/// Coarse path status; present paths have not been verified as the same repository.
+#[derive(serde::Serialize)]
+pub struct LocationAvailability {
+    /// Recorded location path.
+    pub path: String,
+    /// `present_unverified`, `missing`, `not_directory`, or `inaccessible`.
+    pub state: &'static str,
+}
+/// Attach current filesystem-only status without invoking Git or modifying the registry.
+pub fn annotate_locations(repositories: Vec<Repository>) -> Vec<RepositoryListing> {
+    repositories
+        .into_iter()
+        .map(|repository| {
+            let location_availability = repository
+                .locations
+                .iter()
+                .map(|location| {
+                    let state = match std::fs::metadata(&location.path) {
+                        Ok(m) if m.is_dir() => "present_unverified",
+                        Ok(_) => "not_directory",
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+                        Err(_) => "inaccessible",
+                    };
+                    LocationAvailability {
+                        path: location.path.clone(),
+                        state,
+                    }
+                })
+                .collect();
+            RepositoryListing {
+                repository,
+                location_availability,
+            }
+        })
+        .collect()
+}

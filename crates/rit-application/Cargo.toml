@@ -10,3 +10,4 @@ rit-core = { path = "../rit-core" }
 rit-git = { path = "../rit-git" }
 rit-storage = { path = "../rit-storage" }
 thiserror.workspace = true
+serde.workspace = true
