@@ -73,6 +73,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ActivityCommand,
     },
+    /// Simulate a Git merge without changing source/target refs or worktrees.
+    Conflicts {
+        #[command(subcommand)]
+        command: ConflictsCommand,
+    },
     /// Analyze committed source dependencies without registry access.
     Dependencies {
         #[command(subcommand)]
@@ -558,6 +563,21 @@ pub enum ActivityCommand {
         /// Stop notification mode after this many milliseconds (omit for continuous watch).
         #[arg(long)]
         duration_ms: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConflictsCommand {
+    /// Run an ephemeral Git-native merge simulation with stage and structural evidence.
+    Simulate {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        left: String,
+        #[arg(long)]
+        right: String,
         #[arg(long)]
         json: bool,
     },

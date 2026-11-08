@@ -163,10 +163,21 @@ impl Git {
         args: &[OsString],
         operation: &'static str,
     ) -> Result<Vec<u8>, GitError> {
+        self.run_internal(cwd, args, operation, &[], false)
+            .map(|v| v.0)
+    }
+    fn run_internal(
+        &self,
+        cwd: Option<&Path>,
+        args: &[OsString],
+        operation: &'static str,
+        extra_env: &[(&str, OsString)],
+        allow_exit_one: bool,
+    ) -> Result<(Vec<u8>, i32), GitError> {
         // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
         // Fail closed unless the Linux x86-64 child-process restriction can be installed.
-        let restricted =
-            matches!(operation, "status" | "diff") || operation.starts_with("workspace ");
+        let restricted = matches!(operation, "status" | "diff" | "conflict merge")
+            || operation.starts_with("workspace ");
         let _filter = if restricted {
             Some(no_child_filter()?)
         } else {
@@ -213,6 +224,9 @@ impl Git {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
         if let Some(path) = cwd {
             cmd.current_dir(path);
         }
@@ -281,16 +295,27 @@ impl Git {
             thread::sleep(Duration::from_millis(5));
         }
         let status = status.ok_or(GitError::Parse("process status"))?;
-        if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        if !status.success() && !(allow_exit_one && code == 1) {
             return Err(GitError::Exit {
                 operation,
                 code: status.code(),
             });
         }
-        outputs[0]
+        let stderr = outputs[1]
+            .take()
+            .ok_or(GitError::Parse("stderr"))?
+            .map_err(|_| GitError::Parse("stderr read"))?;
+        if operation == "conflict merge" && !stderr.is_empty() {
+            return Err(GitError::Unavailable(
+                "merge simulation produced diagnostics, potentially from an unsupported driver",
+            ));
+        }
+        let out = outputs[0]
             .take()
             .ok_or(GitError::Parse("stdout"))?
-            .map_err(|_| GitError::Parse("stdout read"))
+            .map_err(|_| GitError::Parse("stdout read"))?;
+        Ok((out, code))
     }
     fn query(
         &self,
@@ -786,6 +811,275 @@ impl Git {
             non_atomic: true,
             scope: "non-atomic worktree observation of tracked and untracked supported files; ignored files excluded; staged bytes are not separately analyzed",
         })
+    }
+    /// Simulate an isolated Git merge in a temporary object directory; no refs or worktrees are changed.
+    /// Custom driver configuration is refused. The temporary merge tree is not retained.
+    pub fn simulate_merge(
+        &self,
+        repo: &Path,
+        left: &str,
+        right: &str,
+    ) -> Result<rit_core::conflict::MergeSimulation, GitError> {
+        use rit_core::{
+            conflict::{MergeMessage, MergeSimulation, MergeStage},
+            git_object::ObjectId,
+        };
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(GitError::Unavailable(
+                "merge simulation not validated on this platform",
+            ));
+        }
+        let ins = self.inspect(repo)?;
+        let cwd = repo.canonicalize().map_err(|source| GitError::Path {
+            path: repo.into(),
+            source,
+        })?;
+        let format = self.object_format(&cwd)?;
+        let resolve = |v: &str| -> Result<ObjectId, GitError> {
+            if v.is_empty() || v.len() > 256 || v.contains('\0') {
+                return Err(GitError::Parse("invalid merge revision"));
+            }
+            let oid = self.query(
+                &cwd,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{v}^{{commit}}"),
+                ],
+                "merge revision",
+            )?;
+            ObjectId::new(format, &oid).map_err(GitError::Parse)
+        };
+        let left = resolve(left)?;
+        let right = resolve(right)?;
+        let bases = self
+            .query(
+                &cwd,
+                &["merge-base", "--all", left.as_hex(), right.as_hex()],
+                "merge base",
+            )?
+            .lines()
+            .map(|s| ObjectId::new(format, s).map_err(GitError::Parse))
+            .collect::<Result<Vec<_>, _>>()?;
+        if bases.is_empty() {
+            return Err(GitError::Unavailable("no merge base"));
+        }
+        let comparison_base = bases[0].clone();
+        let changed = |side: &ObjectId| -> Result<Vec<String>, GitError> {
+            let args = [
+                "diff-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                comparison_base.as_hex(),
+                side.as_hex(),
+                "--",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+            let bytes = self.run(Some(&cwd), &args, "conflict merge")?;
+            if !bytes.is_empty() && !bytes.ends_with(&[0]) {
+                return Err(GitError::Parse("changed paths terminator"));
+            }
+            bytes
+                .split(|b| *b == 0)
+                .filter(|b| !b.is_empty())
+                .map(|b| {
+                    std::str::from_utf8(b)
+                        .map(str::to_owned)
+                        .map_err(|_| GitError::NonUnicode)
+                })
+                .collect()
+        };
+        let changed_left = changed(&left)?;
+        let changed_right = changed(&right)?;
+        let configured = self.run(
+            Some(&cwd),
+            &[
+                "config".into(),
+                "--null".into(),
+                "--get-regexp".into(),
+                r"^merge\..*\.driver$".into(),
+            ],
+            "merge driver config",
+        );
+        match configured {
+            Ok(data) if !data.is_empty() => {
+                return Err(GitError::Unavailable("custom merge driver configured"));
+            }
+            Ok(_) | Err(GitError::Exit { code: Some(1), .. }) => (),
+            Err(e) => return Err(e),
+        }
+        let object_dir = Path::new(&ins.common_git_dir)
+            .join("objects")
+            .canonicalize()
+            .map_err(GitError::Launch)?;
+        let object_text = object_dir.to_str().ok_or(GitError::NonUnicode)?;
+        if object_text.contains('\n') || object_text.contains('\r') {
+            return Err(GitError::Unavailable("unsupported object directory path"));
+        }
+        let tmp = tempfile::tempdir().map_err(GitError::Launch)?;
+        let objects = tmp.path().join("objects");
+        std::fs::create_dir_all(objects.join("info")).map_err(GitError::Launch)?;
+        std::fs::create_dir(objects.join("pack")).map_err(GitError::Launch)?;
+        std::fs::write(objects.join("info/alternates"), format!("{object_text}\n"))
+            .map_err(GitError::Launch)?;
+        let args = [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge-tree",
+            "--write-tree",
+            "--messages",
+            "-z",
+            left.as_hex(),
+            right.as_hex(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let (out, code) = self.run_internal(
+            Some(&cwd),
+            &args,
+            "conflict merge",
+            &[("GIT_OBJECT_DIRECTORY", objects.as_os_str().into())],
+            true,
+        )?;
+        if !out.ends_with(&[0]) {
+            return Err(GitError::Parse("merge output terminator"));
+        }
+        let mut parts = out.split(|b| *b == 0);
+        let tree = std::str::from_utf8(parts.next().ok_or(GitError::Parse("merge tree"))?)
+            .map_err(|_| GitError::NonUnicode)?;
+        let ephemeral_tree = ObjectId::new(format, tree).map_err(GitError::Parse)?;
+        let mut stages = Vec::new();
+        loop {
+            let record = parts
+                .next()
+                .ok_or(GitError::Parse("merge stage terminator"))?;
+            if record.is_empty() {
+                break;
+            }
+            let tab = record
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or(GitError::Parse("merge stage path"))?;
+            let meta = std::str::from_utf8(&record[..tab]).map_err(|_| GitError::NonUnicode)?;
+            let mut f = meta.split(' ');
+            let mode = f.next().ok_or(GitError::Parse("merge mode"))?;
+            let object = f.next().ok_or(GitError::Parse("merge object"))?;
+            let stage = f
+                .next()
+                .ok_or(GitError::Parse("merge stage"))?
+                .parse::<u8>()
+                .map_err(|_| GitError::Parse("merge stage"))?;
+            if f.next().is_some()
+                || !(1..=3).contains(&stage)
+                || !matches!(mode, "100644" | "100755" | "120000" | "160000")
+            {
+                return Err(GitError::Parse("invalid merge stage"));
+            }
+            stages.push(MergeStage {
+                path: std::str::from_utf8(&record[tab + 1..])
+                    .map_err(|_| GitError::NonUnicode)?
+                    .into(),
+                stage,
+                mode: mode.into(),
+                object: ObjectId::new(format, object).map_err(GitError::Parse)?,
+            });
+            if stages.len() > 50_000 {
+                return Err(GitError::OutputLimit);
+            }
+        }
+        let mut messages = Vec::new();
+        while let Some(count) = parts.next() {
+            if count.is_empty() {
+                break;
+            }
+            let count = std::str::from_utf8(count)
+                .map_err(|_| GitError::NonUnicode)?
+                .parse::<usize>()
+                .map_err(|_| GitError::Parse("merge message count"))?;
+            if count > 1000 {
+                return Err(GitError::OutputLimit);
+            }
+            let mut paths = Vec::new();
+            for _ in 0..count {
+                paths.push(
+                    std::str::from_utf8(parts.next().ok_or(GitError::Parse("merge message path"))?)
+                        .map_err(|_| GitError::NonUnicode)?
+                        .into(),
+                );
+            }
+            let kind =
+                std::str::from_utf8(parts.next().ok_or(GitError::Parse("merge message kind"))?)
+                    .map_err(|_| GitError::NonUnicode)?
+                    .into();
+            let detail = std::str::from_utf8(
+                parts
+                    .next()
+                    .ok_or(GitError::Parse("merge message detail"))?,
+            )
+            .map_err(|_| GitError::NonUnicode)?
+            .into();
+            messages.push(MergeMessage {
+                paths,
+                kind,
+                detail,
+            });
+            if messages.len() > 50_000 {
+                return Err(GitError::OutputLimit);
+            }
+        }
+        Ok(MergeSimulation {
+            left,
+            right,
+            merge_bases: bases,
+            comparison_base,
+            changed_left,
+            changed_right,
+            ephemeral_tree,
+            has_conflicts: code == 1,
+            stages,
+            messages,
+            human_review_required: true,
+        })
+    }
+    /// Retrieve a bounded immutable blob for structural evidence without running filters.
+    pub fn conflict_blob(
+        &self,
+        repo: &Path,
+        id: &rit_core::git_object::ObjectId,
+    ) -> Result<Vec<u8>, GitError> {
+        let format = self.object_format(repo)?;
+        if id.algorithm() != format {
+            return Err(GitError::Parse("blob object format"));
+        }
+        if self.query(repo, &["cat-file", "-t", id.as_hex()], "blob type")? != "blob" {
+            return Err(GitError::Parse("not a blob"));
+        }
+        let size = self
+            .query(repo, &["cat-file", "-s", id.as_hex()], "blob size")?
+            .parse::<usize>()
+            .map_err(|_| GitError::Parse("blob size"))?;
+        if size > 1_048_576 {
+            return Err(GitError::Unavailable(
+                "blob exceeds structural analysis limit",
+            ));
+        }
+        let b = self.run(
+            Some(repo),
+            &["cat-file".into(), "blob".into(), id.as_hex().into()],
+            "blob content",
+        )?;
+        if b.len() != size {
+            return Err(GitError::Parse("blob length"));
+        }
+        Ok(b)
     }
     /// Create a bounded Git-native workspace, never invoking checkout filters or hooks.
     /// Linux x86-64 only; unsupported content is left in a no-checkout worktree.

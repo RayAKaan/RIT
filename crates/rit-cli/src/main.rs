@@ -5,8 +5,8 @@ mod output;
 
 use clap::Parser;
 use cli::{
-    ActivityCommand, CheckpointCommand, Cli, Command, ConfigCommand, DependenciesCommand,
-    McpCommand, RepositoryCommand, StorageCommand, WorkspaceCommand,
+    ActivityCommand, CheckpointCommand, Cli, Command, ConfigCommand, ConflictsCommand,
+    DependenciesCommand, McpCommand, RepositoryCommand, StorageCommand, WorkspaceCommand,
 };
 use rit_core::{
     config::{self, ConfigFile, Overrides},
@@ -248,6 +248,27 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                     .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
             }
             Ok(())
+        }
+        Command::Conflicts {
+            command:
+                ConflictsCommand::Simulate {
+                    repo,
+                    left,
+                    right,
+                    json,
+                },
+        } => {
+            let service = rit_application::conflicts::ConflictService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let report = service
+                .simulate(&repo, &left, &right)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(
+                &serde_json::json!({"schema_version":1,"conflicts":report}),
+                json,
+            )
+            .map_err(|e| (RUNTIME_FAILURE, e))
         }
         Command::Dependencies { command } => {
             let (repo, commit, branch, worktree, workspace, json) = match command {

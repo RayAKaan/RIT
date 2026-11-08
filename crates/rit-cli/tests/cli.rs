@@ -1223,3 +1223,137 @@ fn workspace_analysis_reads_non_atomic_tracked_and_untracked_sources_without_fol
     }));
     assert_eq!(impact["non_atomic"], true);
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn conflict_simulation_is_isolated_and_reports_git_stages_and_structural_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("app.py"), "def value():\n    return 0\n").unwrap();
+    std::fs::write(repo.join("binary.dat"), b"base\0data\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let rp = repo.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice::<serde_json::Value>(&o.stdout).unwrap()
+    };
+    let mut commits = Vec::new();
+    let mut dirs = Vec::new();
+    for n in 1..=2 {
+        let w = d.path().join(format!("w{n}"));
+        let created = run(&[
+            "workspace",
+            "create",
+            "--repo",
+            rp,
+            "--path",
+            w.to_str().unwrap(),
+            "--name",
+            "merge",
+            "--json",
+        ]);
+        assert_eq!(created["workspace"]["state"], "ready");
+        std::fs::write(w.join("app.py"), format!("def value():\n    return {n}\n")).unwrap();
+        std::fs::write(w.join("binary.dat"), format!("binary\0{n}\n")).unwrap();
+        git(&w, &["add", "."]);
+        git(&w, &["commit", "-qm", &format!("side {n}")]);
+        commits.push(git(&w, &["rev-parse", "HEAD"]));
+        dirs.push(w);
+    }
+    let refs_before = git(
+        &repo,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
+    let status_before = git(&repo, &["status", "--porcelain=v2"]);
+    let result = run(&[
+        "conflicts",
+        "simulate",
+        "--repo",
+        rp,
+        "--left",
+        &commits[0],
+        "--right",
+        &commits[1],
+        "--json",
+    ]);
+    let report = &result["conflicts"];
+    assert_eq!(report["simulation"]["has_conflicts"], true);
+    assert_eq!(report["simulation"]["stages"].as_array().unwrap().len(), 6);
+    assert!(
+        report["structural_candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["path"] == "app.py" && x["name"] == "value")
+    );
+    assert!(
+        report["classifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["category"] == "binary_conflict")
+    );
+    assert_eq!(
+        git(
+            &repo,
+            &["for-each-ref", "--format=%(refname) %(objectname)"]
+        ),
+        refs_before
+    );
+    assert_eq!(git(&repo, &["status", "--porcelain=v2"]), status_before);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("app.py")).unwrap(),
+        "def value():\n    return 0\n"
+    );
+    assert_eq!(git(&dirs[0], &["rev-parse", "HEAD"]), commits[0]);
+    assert_eq!(git(&dirs[1], &["rev-parse", "HEAD"]), commits[1]);
+    let marker = d.path().join("driver-executed");
+    git(
+        &repo,
+        &[
+            "config",
+            "merge.evil.driver",
+            &format!("sh -c 'touch {}'", marker.display()),
+        ],
+    );
+    let bad = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+        .args([
+            "conflicts",
+            "simulate",
+            "--repo",
+            rp,
+            "--left",
+            &commits[0],
+            "--right",
+            &commits[1],
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(!marker.exists());
+}

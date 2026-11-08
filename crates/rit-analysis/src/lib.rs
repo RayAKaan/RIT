@@ -648,3 +648,78 @@ fn graph_cycles(edges: &[ResolvedImport]) -> Vec<Vec<String>> {
     result.sort();
     result
 }
+
+/// Bounded syntax-node evidence; a differing hash does not prove semantic conflict.
+#[derive(Clone, Debug, Serialize)]
+pub struct DeclarationObservation {
+    /// Tree-sitter node kind.
+    pub kind: String,
+    /// Declaration name as written.
+    pub name: String,
+    /// One-based source line.
+    pub line: usize,
+    /// SHA-256 over the full declaration syntax node.
+    pub syntax_sha256: String,
+}
+/// Extract declaration names and hashes from supplied bytes; no semantic inference.
+pub fn declarations(
+    language: Language,
+    source: &[u8],
+) -> Result<Vec<DeclarationObservation>, AnalysisError> {
+    use sha2::{Digest, Sha256};
+    if source.len() > MAX_BYTES {
+        return Err(AnalysisError::InputLimit);
+    }
+    std::str::from_utf8(source).map_err(|_| AnalysisError::InvalidUtf8)?;
+    let grammar = match language {
+        Language::Python => tree_sitter_python::LANGUAGE.into(),
+        Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        Language::Go => tree_sitter_go::LANGUAGE.into(),
+        Language::Unknown => return Err(AnalysisError::UnsupportedLanguage),
+    };
+    let mut p = Parser::new();
+    p.set_language(&grammar)
+        .map_err(|_| AnalysisError::Grammar)?;
+    let tree = p.parse(source, None).ok_or(AnalysisError::Parse)?;
+    if tree.root_node().has_error() {
+        return Err(AnalysisError::Parse);
+    }
+    let mut stack = vec![tree.root_node()];
+    let mut seen = 0;
+    let mut result = Vec::new();
+    while let Some(n) = stack.pop() {
+        seen += 1;
+        if seen > MAX_NODES {
+            return Err(AnalysisError::ComplexityLimit);
+        }
+        if matches!(
+            n.kind(),
+            "function_definition"
+                | "class_definition"
+                | "function_declaration"
+                | "method_declaration"
+                | "method_definition"
+                | "class_declaration"
+                | "interface_declaration"
+                | "type_declaration"
+        ) && let Some(name) = n
+            .child_by_field_name("name")
+            .and_then(|x| x.utf8_text(source).ok())
+        {
+            let bytes = &source[n.byte_range()];
+            result.push(DeclarationObservation {
+                kind: n.kind().into(),
+                name: name.into(),
+                line: n.start_position().row + 1,
+                syntax_sha256: format!("{:x}", Sha256::digest(bytes)),
+            });
+            if result.len() > MAX_IMPORTS {
+                return Err(AnalysisError::ComplexityLimit);
+            }
+        }
+        let mut cursor = n.walk();
+        let children = n.named_children(&mut cursor).collect::<Vec<_>>();
+        stack.extend(children.into_iter().rev());
+    }
+    Ok(result)
+}

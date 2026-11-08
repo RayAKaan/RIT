@@ -371,5 +371,7 @@ impl WorkspaceService {
         Ok(self.git.workspace_lock(repo, id, reason)?)
     }
 }
+/// Isolated Git conflict simulation with advisory structural evidence.
+pub mod conflicts;
 /// Native notification watcher; bounded and ephemeral, with reconciliation required.
 pub mod watcher;
