@@ -160,7 +160,24 @@ impl Git {
         args: &[OsString],
         operation: &'static str,
     ) -> Result<Vec<u8>, GitError> {
-        let mut cmd = Command::new(&self.executable);
+        // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
+        // Fail closed unless the Linux x86-64 child-process restriction can be installed.
+        let restricted = matches!(operation, "status" | "diff");
+        let _filter = if restricted {
+            Some(no_child_filter()?)
+        } else {
+            None
+        };
+        let mut cmd = if let Some(filter) = &_filter {
+            let mut c = Command::new("/usr/bin/setpriv");
+            c.args(["--no-new-privs", "--seccomp-filter"])
+                .arg(filter.path())
+                .arg("--")
+                .arg(&self.executable);
+            c
+        } else {
+            Command::new(&self.executable)
+        };
         // All GIT_* variables can alter repository discovery/config/commands. Preserve normal OS environment.
         for (key, _) in std::env::vars_os() {
             if key
@@ -746,6 +763,12 @@ impl Git {
     }
     /// Inspect an existing repository without registering or modifying it.
     pub fn inspect(&self, input: &Path) -> Result<Inspection, GitError> {
+        self.inspect_inner(input, 0)
+    }
+    fn inspect_inner(&self, input: &Path, depth: usize) -> Result<Inspection, GitError> {
+        if depth > 4 {
+            return Err(GitError::Unavailable("nested submodule depth exceeds four"));
+        }
         let cwd = input.canonicalize().map_err(|source| GitError::Path {
             path: input.to_owned(),
             source,
@@ -824,6 +847,7 @@ impl Git {
         } else {
             let args = [
                 "status",
+                "--ignore-submodules=dirty",
                 "--porcelain=v2",
                 "-z",
                 "--branch",
@@ -832,11 +856,99 @@ impl Git {
             .into_iter()
             .map(OsString::from)
             .collect::<Vec<_>>();
-            Some(crate::status::parse(&self.run(
+            let mut status = crate::status::parse(&self.run(Some(&cwd), &args, "status")?)?;
+            // Git ordinarily spawns another Git for dirty submodules; the restricted
+            // process cannot do that. Inspect initialized submodules ourselves under
+            // the same restriction and attach conservative dirty evidence.
+            let entries = self.run(
                 Some(&cwd),
-                &args,
-                "status",
-            )?)?)
+                &[
+                    OsString::from("ls-files"),
+                    OsString::from("--stage"),
+                    OsString::from("-z"),
+                ],
+                "index entries",
+            )?;
+            let tree = Path::new(root.as_deref().ok_or(GitError::Parse("worktree root"))?);
+            let mut count = 0usize;
+            for record in entries.split(|b| *b == 0).filter(|x| !x.is_empty()) {
+                if !record.starts_with(b"160000 ") {
+                    continue;
+                }
+                let tab = record
+                    .iter()
+                    .position(|b| *b == b'\t')
+                    .ok_or(GitError::Parse("index entry"))?;
+                if !record[..tab].ends_with(b" 0") {
+                    continue;
+                }
+                count += 1;
+                if count > 64 {
+                    return Err(GitError::Unavailable("more than 64 submodules"));
+                }
+                let path =
+                    std::str::from_utf8(&record[tab + 1..]).map_err(|_| GitError::NonUnicode)?;
+                if Path::new(path)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(GitError::Parse("submodule path"));
+                }
+                let sub = tree.join(path);
+                if !sub.join(".git").exists() {
+                    continue;
+                }
+                let nested = self.inspect_inner(&sub, depth + 1)?;
+                if nested.worktree.as_deref()
+                    != sub
+                        .canonicalize()
+                        .ok()
+                        .and_then(|x| x.to_str().map(str::to_owned))
+                        .as_deref()
+                {
+                    return Err(GitError::Parse("submodule worktree mismatch"));
+                }
+                let Some(ns) = nested.status else { continue };
+                let has_untracked = ns.changes.iter().any(|c| c.kind == "untracked");
+                let has_modified = ns.changes.iter().any(|c| c.kind != "untracked");
+                if !has_untracked && !has_modified {
+                    continue;
+                }
+                if let Some(c) = status.changes.iter_mut().find(|c| c.path == path) {
+                    let mut subflag = c
+                        .submodule
+                        .clone()
+                        .unwrap_or_else(|| "S...".into())
+                        .into_bytes();
+                    if subflag.len() == 4 && subflag[0] == b'S' {
+                        if has_modified {
+                            subflag[2] = b'M'
+                        }
+                        if has_untracked {
+                            subflag[3] = b'U'
+                        }
+                        c.submodule = String::from_utf8(subflag).ok();
+                    }
+                    if let Some(xy) = &mut c.xy
+                        && xy.ends_with('.')
+                    {
+                        xy.replace_range(1..2, "M");
+                    }
+                } else {
+                    status.changes.push(rit_core::repository::Change {
+                        kind: "ordinary".into(),
+                        path: path.into(),
+                        original_path: None,
+                        xy: Some(".M".into()),
+                        submodule: Some(format!(
+                            "S.{}{}",
+                            if has_modified { 'M' } else { '.' },
+                            if has_untracked { 'U' } else { '.' }
+                        )),
+                    });
+                }
+            }
+            Some(status)
         };
         let head = if let Some(s) = &status {
             match (s.branch.as_deref(), s.oid.as_deref()) {
@@ -882,4 +994,56 @@ fn terminate(mut child: GroupChild) -> Result<(), GitError> {
         let _ = child.wait();
     });
     result.map_err(GitError::Termination)
+}
+
+// A narrowly scoped mitigation, not a general process/filesystem sandbox: block
+// child process creation in Git's status/diff. Thread-style clone is allowed.
+// clone3 returns ENOSYS so glibc can fall back to clone for legitimate threads.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+    let tool = std::fs::metadata("/usr/bin/setpriv").map_err(|_| {
+        GitError::Unavailable("restricted status requires trusted /usr/bin/setpriv")
+    })?;
+    if !tool.is_file() || tool.uid() != 0 || tool.mode() & 0o022 != 0 {
+        return Err(GitError::Unavailable(
+            "setpriv is not root-owned and protected",
+        ));
+    }
+    // Linux seccomp BPF, x86-64: fork/vfork and non-thread clone => EPERM,
+    // clone3 => ENOSYS; unexpected architectures are killed. Load arguments as
+    // native-endian sock_filter records. No repo-controlled input enters program.
+    let program: [(u16, u8, u8, u32); 15] = [
+        (0x20, 0, 0, 4),
+        (0x15, 1, 0, 0xc000003e),
+        (0x06, 0, 0, 0x80000000),
+        (0x20, 0, 0, 0),
+        (0x15, 0, 1, 57),
+        (0x06, 0, 0, 0x00050001),
+        (0x15, 0, 1, 58),
+        (0x06, 0, 0, 0x00050001),
+        (0x15, 0, 1, 435),
+        (0x06, 0, 0, 0x00050026),
+        (0x15, 0, 3, 56),
+        (0x20, 0, 0, 16),
+        (0x45, 1, 0, 0x00010000),
+        (0x06, 0, 0, 0x00050001),
+        (0x06, 0, 0, 0x7fff0000),
+    ];
+    let mut f = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
+    for (code, jt, jf, k) in program {
+        f.write_all(&code.to_ne_bytes())
+            .and_then(|_| f.write_all(&[jt, jf]))
+            .and_then(|_| f.write_all(&k.to_ne_bytes()))
+            .map_err(GitError::Launch)?;
+    }
+    f.flush().map_err(GitError::Launch)?;
+    Ok(f)
+}
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
+    Err(GitError::Unavailable(
+        "restricted Git status/diff is not validated on this platform",
+    ))
 }

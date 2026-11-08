@@ -10,6 +10,7 @@ publish = false
 rit-core = { path = "../rit-core" }
 thiserror.workspace = true
 command-group = "5.0.1"
+tempfile = "3.24.0"
 
 [dev-dependencies]
 tempfile = "3.24.0"

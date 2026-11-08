@@ -754,3 +754,35 @@ fn rejects_git_without_conservative_lazy_fetch_floor() {
         Err(rit_git::GitError::Unsupported(_))
     ));
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn worktree_hashing_never_executes_repository_clean_filter() {
+    let d = TempDir::new().unwrap();
+    let r = d.path();
+    run(r, &["init", "-q"]);
+    fs::write(r.join(".gitattributes"), "*.txt filter=evil\n").unwrap();
+    fs::write(r.join("file.txt"), "before\n").unwrap();
+    run(r, &["add", "."]);
+    run(r, &["commit", "-qm", "base"]);
+    let marker = r.join("executed");
+    let filter = format!("sh -c 'touch {}; cat'", marker.display());
+    run(r, &["config", "filter.evil.clean", &filter]);
+    fs::write(r.join("file.txt"), "change\n").unwrap();
+    let git = Git::discover(None).unwrap();
+    let _result = git.diff(r);
+    assert!(!marker.exists(), "repository filter was executed");
+    // Equal size and an index-matching timestamp can force status to hash content.
+    let status = Command::new("touch")
+        .arg("-r")
+        .arg(r.join(".git/index"))
+        .arg(r.join("file.txt"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _result = git.inspect(r);
+    assert!(
+        !marker.exists(),
+        "repository filter was executed during status"
+    );
+}
