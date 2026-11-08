@@ -145,3 +145,7 @@ PASS indicates the stated local fixture passed, not a general production guarant
 ## 17. Phase 3 readiness
 
 **Not ready for Phase 3.** Close critical test and CI gaps in §15–16, review data-directory path race protections, verify supported platforms/Git versions, and complete Phase 1 then Phase 2 review in order. Phase 3 should build on `RepositoryId`, the registry's versioned SQLite migration mechanism and `rit-application` boundaries; it must introduce identity/authentication and permission storage in a new migration without making SQLite authoritative for Git. Real authentication, OS isolation and audit integrity remain unimplemented and must not be inferred from repository registration.
+
+## V2 continuation — read-only Git history
+
+The Git adapter now exposes bounded, read-only local branch/tag/remote-tracking reference observations and HEAD commit/parent history with SHA-1/SHA-256-aware validated object IDs. `rit repo branches`, `rit repo refs` and `rit repo log` accept an explicit repository path without opening the registry. Tests use real disposable SHA-1 and SHA-256 repositories and cover annotated tag peeling, commit parents, empty repositories and history limits. These observations can race concurrent Git changes; they are not actor authentication or complete Git history/ref coverage.
