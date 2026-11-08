@@ -11,3 +11,5 @@ pub mod repository;
 /// Pure identity, policy and audit models; not an authentication implementation.
 pub mod security;
 pub mod version;
+/// Workspace lifecycle and isolation types.
+pub mod workspace;

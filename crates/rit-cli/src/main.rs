@@ -103,7 +103,9 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 }
             }
         }
-        Command::Identity { .. }
+        Command::Workspace { .. }
+        | Command::Agent { .. }
+        | Command::Identity { .. }
         | Command::Whoami
         | Command::Permission { .. }
         | Command::Policy { .. }

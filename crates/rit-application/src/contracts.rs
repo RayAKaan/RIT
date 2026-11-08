@@ -75,3 +75,29 @@ pub trait AuthenticationProvider {
 pub fn require_secure_storage() -> Result<(), CapabilityError> {
     Err(CapabilityError::StorageUnverified)
 }
+/// Worktree management contract. No production implementation is registered.
+pub trait WorkspaceProvider {
+    /// Inspect existing workspace metadata after authorization.
+    fn inspect(
+        &self,
+        actor: &ActorContext,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<rit_core::workspace::Workspace, CapabilityError>;
+    /// Plan removal; implementations must not delete uncommitted work silently.
+    fn plan_cleanup(
+        &self,
+        actor: &ActorContext,
+        id: rit_core::workspace::WorkspaceId,
+    ) -> Result<(), CapabilityError>;
+}
+/// OS execution isolation contract. Worktrees alone do not implement this boundary.
+pub trait ExecutionIsolationProvider {
+    /// Indicate whether this provider is validated for the requested isolation profile.
+    fn supports(&self, profile: rit_core::workspace::IsolationProfile) -> bool;
+    /// Execute only after authentication, authorization and verified isolation.
+    fn execute(
+        &self,
+        actor: &ActorContext,
+        workspace: rit_core::workspace::WorkspaceId,
+    ) -> Result<(), CapabilityError>;
+}

@@ -62,6 +62,16 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Workspace operations (currently unavailable).
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
+    /// Agent execution operations (currently unavailable).
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     /// Identity operations (currently unavailable).
     Identity {
         #[command(subcommand)]
@@ -207,4 +217,23 @@ pub enum AuditCommand {
     List,
     /// Verify audit chain; disabled.
     Verify,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Create a workspace; disabled.
+    Create { repository: String },
+    /// List workspaces; disabled.
+    List,
+    /// Inspect a workspace; disabled.
+    Status { id: String },
+    /// Plan workspace removal; disabled.
+    Remove { id: String },
+}
+#[derive(Debug, Subcommand)]
+pub enum AgentCommand {
+    /// Run an agent only in a validated isolated environment; disabled.
+    Run { workspace: String },
+    /// Inspect agent activity; disabled.
+    Activity { id: String },
 }
