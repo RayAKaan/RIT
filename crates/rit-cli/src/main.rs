@@ -4,7 +4,7 @@ mod cli;
 mod output;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand, RepositoryCommand, StorageCommand};
+use cli::{Cli, Command, ConfigCommand, DependenciesCommand, RepositoryCommand, StorageCommand};
 use rit_core::{
     config::{self, ConfigFile, Overrides},
     error::ConfigError,
@@ -94,6 +94,42 @@ fn run(cli: Cli) -> Result<(), (u8, String)> {
                 }
                 StorageCommand::AdoptLegacy { .. } => Err((RUNTIME_FAILURE, "operation unavailable: legacy adoption requires a verified identity-bound intent and SQLite-consistent backup".into())),
             }
+        }
+        Command::Dependencies { command } => {
+            let (repo, json) = match command {
+                DependenciesCommand::Inspect { repo, json }
+                | DependenciesCommand::Refresh { repo, json } => (repo, json),
+            };
+            let service = rit_application::GitReadService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let graph = service
+                .dependencies(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            output::value(&serde_json::json!({"schema_version":1,"graph":graph}), json)
+                .map_err(|e| (RUNTIME_FAILURE, e))
+        }
+        Command::Impact { repo, files, json } => {
+            let service = rit_application::GitReadService::new(
+                rit_git::Git::discover(git_arg).map_err(|e| (RUNTIME_FAILURE, e.to_string()))?,
+            );
+            let graph = service
+                .dependencies(&repo)
+                .map_err(|e| (RUNTIME_FAILURE, e.to_string()))?;
+            let domain = rit_core::impact::DependencyGraph {
+                source_revision: graph.commit.to_string(),
+                edges: graph
+                    .edges
+                    .iter()
+                    .map(|e| rit_core::impact::DependencyEdge {
+                        dependent: e.dependent.clone(),
+                        dependency: e.dependency.clone(),
+                        evidence: format!("{}:{}:{}", e.dependent, e.line, e.specifier),
+                    })
+                    .collect(),
+            };
+            let reports=files.iter().map(|file| {let impact=domain.impact(file,&graph.commit.to_string());serde_json::json!({"changed":file,"known_dependents":impact.known_dependents,"complete":false})}).collect::<Vec<_>>();
+            output::value(&serde_json::json!({"schema_version":1,"commit":graph.commit,"reports":reports,"unresolved":graph.unresolved,"problematic_files":graph.problematic_files,"omitted_non_regular":graph.omitted_non_regular,"complete":false,"scope":graph.scope}),json).map_err(|e|(RUNTIME_FAILURE,e))
         }
         Command::Task { .. }
         | Command::Submission { .. }

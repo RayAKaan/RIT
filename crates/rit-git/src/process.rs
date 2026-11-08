@@ -532,6 +532,98 @@ impl Git {
             unstaged: query(false)?,
         })
     }
+    /// Read bounded Python, TypeScript and Go regular blobs from the current immutable HEAD commit.
+    /// Does not inspect uncommitted changes, follow worktree symlinks, or execute repository scripts.
+    pub fn source_snapshot(
+        &self,
+        input: &Path,
+    ) -> Result<rit_core::git_object::SourceSnapshot, GitError> {
+        use rit_core::git_object::{ObjectId, SourceFile, SourceSnapshot};
+        let ins = self.inspect(input)?;
+        let commit = match ins.head {
+            Head::Branch { commit, .. } | Head::Detached { commit } => commit,
+            Head::Unborn { .. } => {
+                return Err(GitError::Parse("unborn repository has no source snapshot"));
+            }
+        };
+        let format = rit_core::git_object::ObjectFormat::parse(&ins.object_format)
+            .ok_or(GitError::Parse("unsupported object format"))?;
+        let commit = ObjectId::new(format, &commit).map_err(GitError::Parse)?;
+        let cwd = input.canonicalize().map_err(|source| GitError::Path {
+            path: input.to_owned(),
+            source,
+        })?;
+        let args = ["ls-tree", "--full-tree", "-r", "-z", commit.as_hex()]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let tree = self.run(Some(&cwd), &args, "source tree")?;
+        if !tree.is_empty() && !tree.ends_with(&[0]) {
+            return Err(GitError::Parse("tree terminator"));
+        }
+        let mut selections = Vec::new();
+        let mut omitted = 0usize;
+        for entry in tree.split(|b| *b == 0) {
+            if entry.is_empty() {
+                continue;
+            }
+            let tab = entry
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or(GitError::Parse("tree fields"))?;
+            let meta = std::str::from_utf8(&entry[..tab]).map_err(|_| GitError::NonUnicode)?;
+            let path = std::str::from_utf8(&entry[tab + 1..]).map_err(|_| GitError::NonUnicode)?;
+            if !(path.ends_with(".py") || path.ends_with(".ts") || path.ends_with(".go")) {
+                continue;
+            }
+            let mut fields = meta.split(' ');
+            let mode = fields.next().ok_or(GitError::Parse("tree mode"))?;
+            let kind = fields.next().ok_or(GitError::Parse("tree kind"))?;
+            let oid = fields.next().ok_or(GitError::Parse("tree oid"))?;
+            if fields.next().is_some() {
+                return Err(GitError::Parse("tree metadata"));
+            }
+            if kind != "blob" || !matches!(mode, "100644" | "100755") {
+                omitted += 1;
+                continue;
+            }
+            let oid = ObjectId::new(format, oid).map_err(GitError::Parse)?;
+            selections.push((path.to_owned(), oid));
+            if selections.len() > 500 {
+                return Err(GitError::Parse("source file count exceeds 500"));
+            }
+        }
+        let mut files = Vec::new();
+        let mut total = 0usize;
+        for (path, id) in selections {
+            let size = self
+                .query(&cwd, &["cat-file", "-s", id.as_hex()], "blob size")?
+                .parse::<usize>()
+                .map_err(|_| GitError::Parse("blob size"))?;
+            if size > 1_048_576 {
+                return Err(GitError::Parse("source file exceeds 1 MiB"));
+            }
+            total = total.checked_add(size).ok_or(GitError::OutputLimit)?;
+            if total > 8_388_608 {
+                return Err(GitError::Parse("source snapshot exceeds 8 MiB"));
+            }
+            let args = [
+                OsString::from("cat-file"),
+                OsString::from("blob"),
+                OsString::from(id.as_hex()),
+            ];
+            let bytes = self.run(Some(&cwd), &args, "source blob")?;
+            if bytes.len() != size {
+                return Err(GitError::Parse("blob size changed"));
+            }
+            files.push(SourceFile { path, bytes });
+        }
+        Ok(SourceSnapshot {
+            commit,
+            files,
+            omitted_non_regular: omitted,
+        })
+    }
     /// Inspect an existing repository without registering or modifying it.
     pub fn inspect(&self, input: &Path) -> Result<Inspection, GitError> {
         let cwd = input.canonicalize().map_err(|source| GitError::Path {

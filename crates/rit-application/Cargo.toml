@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 [dependencies]
 rit-core = { path = "../rit-core" }
+rit-analysis = { path = "../rit-analysis" }
 rit-git = { path = "../rit-git" }
 rit-storage = { path = "../rit-storage" }
 thiserror.workspace = true

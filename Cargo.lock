@@ -471,6 +471,7 @@ dependencies = [
 name = "rit-application"
 version = "0.1.0-dev.1"
 dependencies = [
+ "rit-analysis",
  "rit-core",
  "rit-git",
  "rit-storage",

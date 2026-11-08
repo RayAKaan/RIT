@@ -17,6 +17,9 @@ pub enum ApplicationError {
     /// Registry operation failed.
     #[error(transparent)]
     Storage(#[from] StorageError),
+    /// Repository source analysis failed.
+    #[error(transparent)]
+    Analysis(#[from] rit_analysis::AnalysisError),
     /// Repository was not registered.
     #[error("repository is not registered; use rit repository register")]
     NotRegistered,
@@ -208,6 +211,15 @@ impl GitReadService {
     /// Inspect an explicit Git repository path.
     pub fn inspect(&self, path: &Path) -> Result<Inspection, ApplicationError> {
         Ok(self.git.inspect(path)?)
+    }
+    /// Analyze supported committed source blobs; no working-tree or registry access.
+    pub fn dependencies(
+        &self,
+        path: &Path,
+    ) -> Result<rit_analysis::RepositoryGraph, ApplicationError> {
+        Ok(rit_analysis::repository_graph(
+            self.git.source_snapshot(path)?,
+        )?)
     }
     /// Obtain the tracked and untracked working-tree status.
     pub fn status(&self, path: &Path) -> Result<rit_core::repository::Status, ApplicationError> {

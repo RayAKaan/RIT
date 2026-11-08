@@ -148,3 +148,20 @@ pub struct DiffObservation {
     /// Unstaged tracked differences.
     pub unstaged: Vec<FileDifference>,
 }
+
+/// A regular tracked file from an immutable commit, intended for bounded analysis.
+pub struct SourceFile {
+    /// Repository-relative UTF-8 path.
+    pub path: String,
+    /// Raw blob bytes, potentially sensitive; never log by default.
+    pub bytes: Vec<u8>,
+}
+/// A bounded set of supported source files from one Git commit; not the working tree.
+pub struct SourceSnapshot {
+    /// Source commit ID.
+    pub commit: ObjectId,
+    /// Selected source blobs.
+    pub files: Vec<SourceFile>,
+    /// Number of source-like symlinks/submodules omitted.
+    pub omitted_non_regular: usize,
+}

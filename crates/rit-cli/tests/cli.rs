@@ -320,3 +320,87 @@ fn repository_read_commands_use_real_git_without_registry() {
         assert!(!data.exists());
     }
 }
+
+#[test]
+fn real_committed_dependency_graph_and_impact_are_revision_bound() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let data = d.path().join("no-registry");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir(repo.join("pkg")).unwrap();
+    std::fs::write(repo.join("pkg/base.py"), "def f(): pass\n").unwrap();
+    std::fs::write(repo.join("pkg/mid.py"), "from .base import f\n").unwrap();
+    std::fs::write(
+        repo.join("pkg/top.py"),
+        "from pkg.mid import f\nimport external_module\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("app.ts"), "import {x} from './util';\n").unwrap();
+    std::fs::write(repo.join("util.ts"), "export const x=1;\n").unwrap();
+    git(&["add", "--all"]);
+    git(&["commit", "-q", "-m", "source"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    // Uncommitted edits are not misrepresented as analyzed HEAD content.
+    std::fs::write(repo.join("pkg/top.py"), "# dirty state ignored\n").unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rit"))
+            .arg("--data-dir")
+            .arg(&data)
+            .args(args)
+            .env("XDG_CONFIG_HOME", d.path().join("config"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let p = repo.to_str().unwrap();
+    let graph = run(&["dependencies", "inspect", "--repo", p, "--json"]);
+    assert_eq!(graph["graph"]["commit"]["hex"], head);
+    assert_eq!(graph["graph"]["complete"], false);
+    let edges = graph["graph"]["edges"].as_array().unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["dependent"] == "pkg/mid.py" && e["dependency"] == "pkg/base.py")
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["dependent"] == "app.ts" && e["dependency"] == "util.ts")
+    );
+    assert!(
+        graph["graph"]["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["specifier"] == "external_module")
+    );
+    let impact = run(&["impact", "--repo", p, "--files", "pkg/base.py", "--json"]);
+    let result = impact["reports"][0]["known_dependents"].as_array().unwrap();
+    assert!(result.iter().any(|s| s == "pkg/mid.py"));
+    assert!(result.iter().any(|s| s == "pkg/top.py"));
+    assert!(!data.exists());
+}

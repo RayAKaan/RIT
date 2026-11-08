@@ -63,6 +63,20 @@ pub enum Command {
         #[command(subcommand)]
         command: RepositoryCommand,
     },
+    /// Analyze committed source dependencies without registry access.
+    Dependencies {
+        #[command(subcommand)]
+        command: DependenciesCommand,
+    },
+    /// Analyze known dependents in committed HEAD (partial analysis).
+    Impact {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long, required = true)]
+        files: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Task and review operations (currently unavailable).
     Task {
         #[command(subcommand)]
@@ -355,4 +369,22 @@ pub enum TaskCommand {
     Status { id: String },
     /// Record a review; disabled.
     Review { submission: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DependenciesCommand {
+    /// Inspect static imports in committed HEAD; no durable cache.
+    Inspect {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recompute static imports in committed HEAD; no durable cache.
+    Refresh {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
