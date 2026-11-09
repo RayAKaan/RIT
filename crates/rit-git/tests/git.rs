@@ -126,7 +126,7 @@ fn timeout_and_output_limit_are_enforced() {
     let repo = repo.display();
     let script = dir.path().join("fake-git");
     let base = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --version) echo 'git version 2.47.3'; exit 0;; esac; done\nfor a in \"$@\"; do case \"$a\" in --is-bare-repository) echo false; exit 0;; --absolute-git-dir) echo '{repo}/.git'; exit 0;; --git-common-dir) echo '{repo}/.git'; exit 0;; --show-toplevel) echo '{repo}'; exit 0;; --show-object-format) echo sha1; exit 0;; --is-shallow-repository) echo false; exit 0;; esac; done\nif [ \"$1\" = remote ]; then exit 0; fi\nif [ \"$1\" = ls-files ]; then exit 0; fi\n"
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --version) echo 'git version 2.47.3'; exit 0;; esac; done\nfor a in \"$@\"; do case \"$a\" in --is-bare-repository) echo false; exit 0;; --absolute-git-dir) echo '{repo}/.git'; exit 0;; --git-common-dir) echo '{repo}/.git'; exit 0;; --show-toplevel) echo '{repo}'; exit 0;; --show-object-format) echo sha1; exit 0;; --is-shallow-repository) echo false; exit 0;; esac; done\nif echo \" $* \" | grep -q ' remote '; then exit 0; fi\nif echo \" $* \" | grep -q ' ls-files '; then exit 0; fi\n"
     );
     fs::write(
         &script,
@@ -145,7 +145,7 @@ fn timeout_and_output_limit_are_enforced() {
     ));
     fs::write(
         &script,
-        format!("{base}if echo \" $* \" | grep -q ' status '; then python3 -c \"print('x'*12000, end='')\"; exit 0; fi\necho 'ok'\n"),
+        format!("{base}if echo \" $* \" | grep -q ' status '; then printf '%012000d' 0; exit 0; fi\necho 'ok'\n"),
     )
     .unwrap();
     let git = Git::discover(Some(script.as_os_str()))

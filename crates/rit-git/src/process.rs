@@ -589,20 +589,8 @@ impl Git {
         // Keep read-only diffs from executing repository filter/smudge drivers. Wildcard
         // config keys are not handled by git config, so neutralize explicitly named filters.
         // .git/info/attributes has highest precedence and can disable repo .gitattributes filters.
-        let git_dir = self.query(&cwd, &["rev-parse", "--absolute-git-dir"], "diff gitdir")?;
-        let _attr_guard = write_neutral_attributes(Path::new(git_dir.trim())).ok();
-        let mut filter_overrides: Vec<OsString> = Vec::new();
-        if let Ok((_attrs, filters)) = read_repo_filter_attributes(&cwd) {
-            for filter in filters {
-                if filter.is_empty() || filter.bytes().any(|b| b"=\r\n\0".contains(&b)) {
-                    continue;
-                }
-                for key in ["clean", "smudge", "process", "required"] {
-                    filter_overrides.push("-c".into());
-                    filter_overrides.push(format!("filter.{filter}.{key}=").into());
-                }
-            }
-        }
+        let _attr_guards = neutralize_all_attributes(&cwd, self);
+        let filter_overrides = filter_driver_disable_args(&cwd);
         let query = |staged: bool| -> Result<Vec<FileDifference>, GitError> {
             let mut args = vec![
                 OsString::from("diff"),
@@ -4530,11 +4518,25 @@ fn filter_driver_disable_args(cwd: &Path) -> Vec<OsString> {
     args
 }
 
-fn neutralize_repo_attributes(cwd: &Path, git: &Git) -> Option<DiffAttributesGuard> {
-    let git_dir = git
-        .query(cwd, &["rev-parse", "--absolute-git-dir"], "gitdir")
-        .ok()?;
-    write_neutral_attributes(Path::new(git_dir.trim())).ok()
+fn neutralize_repo_attributes(cwd: &Path, git: &Git) -> Vec<DiffAttributesGuard> {
+    neutralize_all_attributes(cwd, git)
+}
+
+fn neutralize_all_attributes(cwd: &Path, git: &Git) -> Vec<DiffAttributesGuard> {
+    let mut guards = Vec::new();
+    for key in ["--absolute-git-dir", "--git-common-dir"] {
+        if let Ok(dir) = git.query(cwd, &["rev-parse", key], "gitdir")
+            && let Ok(guard) = write_neutral_attributes(Path::new(dir.trim()))
+        {
+            if !guards
+                .iter()
+                .any(|g: &DiffAttributesGuard| g.path == guard.path)
+            {
+                guards.push(guard);
+            }
+        }
+    }
+    guards
 }
 
 struct DiffAttributesGuard {
