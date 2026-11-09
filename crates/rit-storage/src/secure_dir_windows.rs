@@ -265,7 +265,9 @@ fn norm_parts(input: &Path) -> Result<(PathBuf, Vec<std::ffi::OsString>), Storag
     if parts.is_empty() {
         return Err(err("filesystem root cannot be the data directory"));
     }
-    Ok((prefix.join(r"\"), parts))
+    let mut root = prefix;
+    root.push(r"\");
+    Ok((root, parts))
 }
 fn at(root: &Path, parts: &[std::ffi::OsString], i: usize) -> PathBuf {
     let mut p = root.to_path_buf();
@@ -291,7 +293,7 @@ pub fn prepare(input: &Path, create: bool) -> Result<Option<Guard>, StorageError
                     }
                     open_dir_no_follow(&cur).map_err(|_| err("cannot open created directory"))?
                 }
-                Err(e) => return Err(std::io::Error::from(e).into()),
+                Err(e) => return Err(e.into()),
             };
             let _ = check_dir_handle(h)?;
             CloseHandle(h);
@@ -325,10 +327,11 @@ unsafe fn check_objects(dir: &Path) -> Result<(), StorageError> {
         "rit-storage.adopt.intent",
     ] {
         let p = dir.join(name);
-        if let Some(i) = unsafe { inspect_object(&p)? } {
-            if i.nNumberOfLinks > 1 && (name == "rit.sqlite3" || name.starts_with("rit.sqlite3-")) {
-                return Err(StorageError::HardLinkedDatabase);
-            }
+        if let Some(i) = unsafe { inspect_object(&p)? }
+            && i.nNumberOfLinks > 1
+            && (name == "rit.sqlite3" || name.starts_with("rit.sqlite3-"))
+        {
+            return Err(StorageError::HardLinkedDatabase);
         }
     }
     Ok(())
@@ -375,7 +378,7 @@ impl Guard {
                 {
                     Ok(false)
                 }
-                Err(e) => Err(std::io::Error::from(e).into()),
+                Err(e) => Err(e.into()),
             }
         }
     }

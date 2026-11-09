@@ -43,6 +43,9 @@ mod linux {
         pub path: PathBuf,
     }
     impl Guard {
+        pub fn flush_dir(&self) -> Result<(), StorageError> {
+            Ok(())
+        }
         pub fn lock_initialization(&self) -> Result<OwnedFd, StorageError> {
             use rustix::fs::{FlockOperation, flock};
             let fd = openat(

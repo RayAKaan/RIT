@@ -296,7 +296,12 @@ fn write_manifest_atomic(
     f.sync_all()?;
     drop(f);
     fs::rename(&tmp, manifest_path(&directory.path))?;
+    #[cfg(target_os = "windows")]
     let _ = directory.flush_dir();
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = directory;
+    }
     Ok(())
 }
 fn ensure_db_identity(c: &Connection) -> Result<(String, String), StorageError> {
@@ -340,10 +345,9 @@ fn verify_manifest_binding(
     }
     if let (Some(expected), Some(actual)) =
         (m.file_id.as_ref(), directory.file_identity("rit.sqlite3")?)
+        && expected != &actual
     {
-        if expected != &actual {
-            return Err(StorageError::BadSchema);
-        }
+        return Err(StorageError::BadSchema);
     }
     Ok(())
 }

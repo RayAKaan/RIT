@@ -2,8 +2,6 @@ use crate::StorageError;
 use serde::{Deserialize, Serialize};
 
 pub const MANIFEST_NAME: &str = "rit-storage.manifest.json";
-pub const INIT_INTENT: &str = "rit-storage.init.intent";
-pub const ADOPT_INTENT: &str = "rit-storage.adopt.intent";
 pub const IDENTITY_TABLE_SQL: &str = "CREATE TABLE rit_storage_identity (k TEXT PRIMARY KEY NOT NULL, v TEXT NOT NULL CHECK(length(v)>0))";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
