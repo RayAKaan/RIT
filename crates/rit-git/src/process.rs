@@ -215,27 +215,33 @@ impl Git {
             ]);
         if operation == "diff" {
             // Prevent repository-controlled clean/smudge filters and textconv from
-            // executing during read-only worktree diff inspection. Wildcard config keys are
-            // not portable, so explicit local driver overrides are added by diff() as well.
-            cmd.env("GIT_ATTR_NOSYSTEM", "1")
-                .arg("-c")
-                .arg(if cfg!(windows) {
+            // executing during read-only worktree diff inspection.
+            cmd.env("GIT_ATTR_NOSYSTEM", "1").arg("-c").arg(
+                if cfg!(windows) {
                     "core.attributesFile=NUL"
                 } else {
                     "core.attributesFile=/dev/null"
-                })
-                .arg("-c")
-                .arg("filter.*.clean=")
-                .arg("-c")
-                .arg("filter.*.smudge=")
-                .arg("-c")
-                .arg("filter.*.process=")
-                .arg("-c")
-                .arg("diff.*.textconv=")
-                .arg("-c")
-                .arg("diff.*.command=")
-                .arg("-c")
-                .arg("diff.*.xfuncname=");
+                },
+            );
+            if let Some(dir) = cwd
+                && let Ok((_attrs, filters)) = read_repo_filter_attributes(dir)
+            {
+                for filter in filters {
+                    if filter.is_empty() || filter.bytes().any(|b| b"=\r\n\0".contains(&b)) {
+                        continue;
+                    }
+                    for key in ["clean", "smudge", "process", "required"] {
+                        cmd.arg("-c").arg(format!("filter.{filter}.{key}="));
+                    }
+                }
+            }
+            for entry in [
+                "diff.*.textconv=",
+                "diff.*.command=",
+                "diff.*.xfuncname=",
+            ] {
+                cmd.arg("-c").arg(entry);
+            }
         }
         cmd.args(args)
             .stdin(if input.is_some() {
@@ -586,11 +592,9 @@ impl Git {
         if ins.bare {
             return Err(GitError::Parse("bare repository has no working tree"));
         }
-        // Keep read-only diffs from executing repository filter/smudge drivers. Wildcard
-        // config keys are not handled by git config, so neutralize explicitly named filters.
+        // Keep read-only diffs from executing repository filter/smudge drivers.
         // .git/info/attributes has highest precedence and can disable repo .gitattributes filters.
         let _attr_guards = neutralize_all_attributes(&cwd, self);
-        let filter_overrides = filter_driver_disable_args(&cwd);
         let query = |staged: bool| -> Result<Vec<FileDifference>, GitError> {
             let mut args = vec![
                 OsString::from("diff"),
@@ -600,7 +604,6 @@ impl Git {
                 OsString::from("--raw"),
                 OsString::from("-z"),
             ];
-            args.extend(filter_overrides.iter().cloned());
             if staged {
                 args.push(OsString::from("--cached"));
             }
