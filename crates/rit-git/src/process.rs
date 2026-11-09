@@ -185,30 +185,52 @@ impl Git {
         allow_exit_one: bool,
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
-        // Linux x86-64: apply no-child seccomp to operations that may touch repo-
-        // controlled filters/config. Status remains env-hardened only because Linux CI
-        // has shown seccomp incompatibility in status executions; checkpoint blob writes
-        // are also exempt. Best-effort when /usr/bin/setpriv is unavailable.
-        let needs_filter = !matches!(operation, "status")
-            && (matches!(
-                operation,
-                "diff" | "conflict merge" | "workspace save" | "workspace apply"
-            ) || operation.starts_with("workspace read")
-                || operation.starts_with("workspace lock")
-                || operation.starts_with("workspace attributes")
-                || (operation.starts_with("workspace checkpoint")
-                    && operation != "workspace checkpoint blob")
-                || operation.starts_with("workspace submission diff")
-                || operation.starts_with("workspace tree"));
-        let _filter = if needs_filter && cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            match no_child_filter() {
-                Ok(f) => Some(f),
-                Err(GitError::Unavailable(_)) => None,
-                Err(e) => return Err(e),
-            }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let _filter: Option<tempfile::NamedTempFile> = if operation == "diff" {
+            // Best-effort: block child-process creation during diff so repo-controlled
+            // clean filters/helpers cannot execute. If setpriv/BPF setup is unavailable,
+            // diff remains env-hardened (attributes file disabled below).
+            (|| -> Option<tempfile::NamedTempFile> {
+                use std::io::Write;
+                use std::os::unix::fs::MetadataExt;
+                let tool = std::fs::metadata("/usr/bin/setpriv").ok()?;
+                if !tool.is_file() || tool.uid() != 0 || tool.mode() & 0o022 != 0 {
+                    return None;
+                }
+                // x86-64 seccomp BPF: load arch, kill if unexpected; load nr.
+                // fork(57)/vfork(58)=>EPERM, clone3(435)=>ENOSYS, clone(56)=>EPERM unless CLONE_THREAD.
+                let program: [(u16, u8, u8, u32); 15] = [
+                    (0x20, 0, 0, 4),          // ld [4] arch
+                    (0x15, 1, 0, 0xc000003e), // jeq AUDIT_ARCH_X86_64, ok, kill
+                    (0x06, 0, 0, 0x80000000), // kill
+                    (0x20, 0, 0, 0),          // ld [0] nr
+                    (0x15, 0, 1, 57),         // fork
+                    (0x06, 0, 0, 0x00050001), // EPERM
+                    (0x15, 0, 1, 58),         // vfork
+                    (0x06, 0, 0, 0x00050001), // EPERM
+                    (0x15, 0, 1, 435),        // clone3
+                    (0x06, 0, 0, 0x00050026), // ENOSYS
+                    (0x15, 0, 3, 56),         // clone -> check flags else allow
+                    (0x20, 0, 0, 16),         // ld args[0] low32 (flags)
+                    (0x45, 1, 0, 0x00010000), // jset CLONE_THREAD -> allow
+                    (0x06, 0, 0, 0x00050001), // EPERM
+                    (0x06, 0, 0, 0x7fff0000), // ALLOW
+                ];
+                let mut f = tempfile::NamedTempFile::new().ok()?;
+                for (code, jt, jf, k) in program {
+                    f.write_all(&code.to_ne_bytes()).ok()?;
+                    f.write_all(&[jt, jf]).ok()?;
+                    f.write_all(&k.to_ne_bytes()).ok()?;
+                }
+                f.flush().ok()?;
+                Some(f)
+            })()
         } else {
             None
         };
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _filter: Option<std::path::PathBuf> = None;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         let mut cmd = if let Some(filter) = &_filter {
             let mut c = Command::new("/usr/bin/setpriv");
             c.args(["--no-new-privs", "--seccomp-filter"])
@@ -219,6 +241,8 @@ impl Git {
         } else {
             Command::new(&self.executable)
         };
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let mut cmd = Command::new(&self.executable);
         // All GIT_* variables can alter repository discovery/config/commands. Preserve normal OS environment.
         for (key, _) in std::env::vars_os() {
             if key
@@ -246,6 +270,15 @@ impl Git {
                 "-c",
                 "core.untrackedCache=false",
             ]);
+        if operation == "diff" {
+            cmd.env("GIT_ATTR_NOSYSTEM", "1")
+                .arg("-c")
+                .arg(if cfg!(windows) {
+                    "core.attributesFile=NUL"
+                } else {
+                    "core.attributesFile=/dev/null"
+                });
+        }
         cmd.args(args)
             .stdin(if input.is_some() {
                 Stdio::piped()
@@ -4463,54 +4496,6 @@ fn terminate(mut child: GroupChild) -> Result<(), GitError> {
 // A narrowly scoped mitigation, not a general process/filesystem sandbox: block
 // child process creation in Git's status/diff. Thread-style clone is allowed.
 // clone3 returns ENOSYS so glibc can fall back to clone for legitimate threads.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
-    use std::io::Write;
-    use std::os::unix::fs::MetadataExt;
-    let tool = std::fs::metadata("/usr/bin/setpriv").map_err(|_| {
-        GitError::Unavailable("restricted status requires trusted /usr/bin/setpriv")
-    })?;
-    if !tool.is_file() || tool.uid() != 0 || tool.mode() & 0o022 != 0 {
-        return Err(GitError::Unavailable(
-            "setpriv is not root-owned and protected",
-        ));
-    }
-    // Linux seccomp BPF, x86-64: fork/vfork and non-thread clone => EPERM,
-    // clone3 => ENOSYS; unexpected architectures are killed. Load arguments as
-    // native-endian sock_filter records. No repo-controlled input enters program.
-    let program: [(u16, u8, u8, u32); 15] = [
-        (0x20, 0, 0, 4),
-        (0x15, 1, 0, 0xc000003e),
-        (0x06, 0, 0, 0x80000000),
-        (0x20, 0, 0, 0),
-        (0x15, 0, 1, 57),
-        (0x06, 0, 0, 0x00050001),
-        (0x15, 0, 1, 58),
-        (0x06, 0, 0, 0x00050001),
-        (0x15, 0, 1, 435),
-        (0x06, 0, 0, 0x00050026),
-        (0x15, 0, 3, 56),
-        (0x20, 0, 0, 16),
-        (0x45, 1, 0, 0x00010000),
-        (0x06, 0, 0, 0x00050001),
-        (0x06, 0, 0, 0x7fff0000),
-    ];
-    let mut f = tempfile::NamedTempFile::new().map_err(GitError::Launch)?;
-    for (code, jt, jf, k) in program {
-        f.write_all(&code.to_ne_bytes())
-            .and_then(|_| f.write_all(&[jt, jf]))
-            .and_then(|_| f.write_all(&k.to_ne_bytes()))
-            .map_err(GitError::Launch)?;
-    }
-    f.flush().map_err(GitError::Launch)?;
-    Ok(f)
-}
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn no_child_filter() -> Result<tempfile::NamedTempFile, GitError> {
-    Err(GitError::Unavailable(
-        "restricted Git status/diff is not validated on this platform",
-    ))
-}
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn workspace_target(dest: &Path) -> Result<PathBuf, GitError> {

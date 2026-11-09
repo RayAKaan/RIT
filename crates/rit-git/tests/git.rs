@@ -122,8 +122,19 @@ fn timeout_and_output_limit_are_enforced() {
     use std::time::Duration;
     let dir = TempDir::new().unwrap();
     run(dir.path(), &["init", "-q"]);
+    let repo = dir.path().canonicalize().unwrap();
+    let repo = repo.display();
     let script = dir.path().join("fake-git");
-    fs::write(&script,"#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = --version ]; then echo 'git version 2.47.3'; exit 0; fi; done\nfor a in \"$@\"; do if [ \"$a\" = 'status' ]; then sleep 5; echo 'ok'; exit 0; fi; done\necho 'ok'\n").unwrap();
+    let base = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --version) echo 'git version 2.47.3'; exit 0;; esac; done\nfor a in \"$@\"; do case \"$a\" in --is-bare-repository) echo false; exit 0;; --absolute-git-dir) echo '{repo}/.git'; exit 0;; --git-common-dir) echo '{repo}/.git'; exit 0;; --show-toplevel) echo '{repo}'; exit 0;; --show-object-format) echo sha1; exit 0;; --is-shallow-repository) echo false; exit 0;; esac; done\nif [ \"$1\" = remote ]; then exit 0; fi\nif [ \"$1\" = ls-files ]; then exit 0; fi\n"
+    );
+    fs::write(
+        &script,
+        format!(
+            "{base}if echo \" $* \" | grep -q ' status '; then sleep 5; exit 0; fi\necho 'ok'\n"
+        ),
+    )
+    .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     let git = Git::discover(Some(script.as_os_str()))
         .unwrap()
@@ -132,7 +143,11 @@ fn timeout_and_output_limit_are_enforced() {
         git.inspect(dir.path()),
         Err(rit_git::GitError::Timeout)
     ));
-    fs::write(&script,"#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = --version ]; then echo 'git version 2.47.3'; exit 0; fi; done\nfor a in \"$@\"; do if [ \"$a\" = 'status' ]; then head -c 10000 /dev/zero; exit 0; fi; done\necho 'ok'\n").unwrap();
+    fs::write(
+        &script,
+        format!("{base}if echo \" $* \" | grep -q ' status '; then head -c 10000 /dev/zero; exit 0; fi\necho 'ok'\n"),
+    )
+    .unwrap();
     let git = Git::discover(Some(script.as_os_str()))
         .unwrap()
         .with_limits(Duration::from_secs(2), 128);
