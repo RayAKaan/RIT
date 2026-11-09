@@ -554,10 +554,16 @@ impl Git {
                     return Err(GitError::Parse("unknown worktree record"));
                 }
             }
+            let path = path
+                .filter(|x| !x.is_empty())
+                .ok_or(GitError::Parse("missing worktree path"))?;
+            let path = PathBuf::from(&path)
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .unwrap_or(path);
             records.push(WorktreeRecord {
-                path: path
-                    .filter(|x| !x.is_empty())
-                    .ok_or(GitError::Parse("missing worktree path"))?,
+                path,
                 head,
                 branch,
                 detached,
@@ -4297,95 +4303,103 @@ impl Git {
             .map(OsString::from)
             .collect::<Vec<_>>();
             let mut status = crate::status::parse(&self.run(Some(&cwd), &args, "status")?)?;
-            // Git ordinarily spawns another Git for dirty submodules; the restricted
-            // process cannot do that. Inspect initialized submodules ourselves under
-            // the same restriction and attach conservative dirty evidence.
-            let entries = self.run(
-                Some(&cwd),
-                &[
-                    OsString::from("ls-files"),
-                    OsString::from("--stage"),
-                    OsString::from("-z"),
-                ],
-                "index entries",
-            )?;
-            let tree = Path::new(root.as_deref().ok_or(GitError::Parse("worktree root"))?);
-            let mut count = 0usize;
-            for record in entries.split(|b| *b == 0).filter(|x| !x.is_empty()) {
-                if !record.starts_with(b"160000 ") {
-                    continue;
-                }
-                let tab = record
-                    .iter()
-                    .position(|b| *b == b'\t')
-                    .ok_or(GitError::Parse("index entry"))?;
-                if !record[..tab].ends_with(b" 0") {
-                    continue;
-                }
-                count += 1;
-                if count > 64 {
-                    return Err(GitError::Unavailable("more than 64 submodules"));
-                }
-                let path =
-                    std::str::from_utf8(&record[tab + 1..]).map_err(|_| GitError::NonUnicode)?;
-                if Path::new(path)
-                    .components()
-                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                {
-                    return Err(GitError::Parse("submodule path"));
-                }
-                let sub = tree.join(path);
-                if !sub.join(".git").exists() {
-                    continue;
-                }
-                let nested = self.inspect_inner(&sub, depth + 1)?;
-                if nested.worktree.as_deref()
-                    != sub
-                        .canonicalize()
-                        .ok()
-                        .and_then(|x| x.to_str().map(str::to_owned))
-                        .as_deref()
-                {
-                    return Err(GitError::Parse("submodule worktree mismatch"));
-                }
-                let Some(ns) = nested.status else { continue };
-                let has_untracked = ns.changes.iter().any(|c| c.kind == "untracked");
-                let has_modified = ns.changes.iter().any(|c| c.kind != "untracked");
-                if !has_untracked && !has_modified {
-                    continue;
-                }
-                if let Some(c) = status.changes.iter_mut().find(|c| c.path == path) {
-                    let mut subflag = c
-                        .submodule
-                        .clone()
-                        .unwrap_or_else(|| "S...".into())
-                        .into_bytes();
-                    if subflag.len() == 4 && subflag[0] == b'S' {
-                        if has_modified {
-                            subflag[2] = b'M'
-                        }
-                        if has_untracked {
-                            subflag[3] = b'U'
-                        }
-                        c.submodule = String::from_utf8(subflag).ok();
+            // Best-effort dirty-submodule evidence. The restricted status path cannot
+            // spawn another Git for submodule summaries, so inspect initialized submodules
+            // ourselves; if that inspection is unavailable, keep the base status result.
+            if let Some(tree_root) = root.as_deref()
+                && let Ok(entries) = self.run(
+                    Some(&cwd),
+                    &[
+                        OsString::from("ls-files"),
+                        OsString::from("--stage"),
+                        OsString::from("-z"),
+                    ],
+                    "index entries",
+                )
+            {
+                let tree = Path::new(tree_root);
+                let mut count = 0usize;
+                'submodules: for record in entries.split(|b| *b == 0).filter(|x| !x.is_empty()) {
+                    if !record.starts_with(b"160000 ") {
+                        continue;
                     }
-                    if let Some(xy) = &mut c.xy
-                        && xy.ends_with('.')
+                    let tab = match record.iter().position(|b| *b == b'\t') {
+                        Some(t) => t,
+                        None => break 'submodules,
+                    };
+                    if !record[..tab].ends_with(b" 0") {
+                        continue;
+                    }
+                    count += 1;
+                    if count > 64 {
+                        break 'submodules;
+                    }
+                    let path = match std::str::from_utf8(&record[tab + 1..]) {
+                        Ok(p) => p,
+                        Err(_) => break 'submodules,
+                    };
+                    if Path::new(path)
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
                     {
-                        xy.replace_range(1..2, "M");
+                        break 'submodules;
                     }
-                } else {
-                    status.changes.push(rit_core::repository::Change {
-                        kind: "ordinary".into(),
-                        path: path.into(),
-                        original_path: None,
-                        xy: Some(".M".into()),
-                        submodule: Some(format!(
-                            "S.{}{}",
-                            if has_modified { 'M' } else { '.' },
-                            if has_untracked { 'U' } else { '.' }
-                        )),
-                    });
+                    let sub = tree.join(path);
+                    if !sub.join(".git").exists() {
+                        continue;
+                    }
+                    let nested = match self.inspect_inner(&sub, depth + 1) {
+                        Ok(n) => n,
+                        Err(_) => break 'submodules,
+                    };
+                    if nested.worktree.as_deref()
+                        != sub
+                            .canonicalize()
+                            .ok()
+                            .and_then(|x| x.to_str().map(str::to_owned))
+                            .as_deref()
+                    {
+                        break 'submodules;
+                    }
+                    let Some(ns) = nested.status else { continue };
+                    let has_untracked = ns.changes.iter().any(|c| c.kind == "untracked");
+                    let has_modified = ns.changes.iter().any(|c| c.kind != "untracked");
+                    if !has_untracked && !has_modified {
+                        continue;
+                    }
+                    if let Some(c) = status.changes.iter_mut().find(|c| c.path == path) {
+                        let mut subflag = c
+                            .submodule
+                            .clone()
+                            .unwrap_or_else(|| "S...".into())
+                            .into_bytes();
+                        if subflag.len() == 4 && subflag[0] == b'S' {
+                            if has_modified {
+                                subflag[2] = b'M'
+                            }
+                            if has_untracked {
+                                subflag[3] = b'U'
+                            }
+                            c.submodule = String::from_utf8(subflag).ok();
+                        }
+                        if let Some(xy) = &mut c.xy
+                            && xy.ends_with('.')
+                        {
+                            xy.replace_range(1..2, "M");
+                        }
+                    } else {
+                        status.changes.push(rit_core::repository::Change {
+                            kind: "ordinary".into(),
+                            path: path.into(),
+                            original_path: None,
+                            xy: Some(".M".into()),
+                            submodule: Some(format!(
+                                "S.{}{}",
+                                if has_modified { 'M' } else { '.' },
+                                if has_untracked { 'U' } else { '.' }
+                            )),
+                        });
+                    }
                 }
             }
             Some(status)

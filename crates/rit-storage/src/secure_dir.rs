@@ -255,16 +255,36 @@ mod other {
             Ok(())
         }
         pub fn file_identity(&self, name: &str) -> Result<Option<String>, StorageError> {
+            use std::fs;
+            #[cfg(unix)]
+            use std::os::unix::fs::MetadataExt;
             let p = self.path.join(name);
-            match std::fs::metadata(&p) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(e.into()),
-                Ok(m) => {
-                    if !m.is_file() {
-                        return Err(err("storage object is not a regular file"));
-                    }
-                    Ok(None)
+            let m = match fs::symlink_metadata(&p) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(e.into()),
+                Ok(m) => m,
+            };
+            if m.file_type().is_symlink() {
+                return Err(err("storage object must not be a symlink"));
+            }
+            if !m.is_file() {
+                return Err(err("storage object is not a regular file"));
+            }
+            #[cfg(unix)]
+            {
+                if m.nlink() > 1 {
+                    return Err(StorageError::HardLinkedDatabase);
                 }
+                return Ok(Some(format!(
+                    "dev:{:x}:ino:{:x}:nlink:{}",
+                    m.dev(),
+                    m.ino(),
+                    m.nlink()
+                )));
+            }
+            #[cfg(not(unix))]
+            {
+                Ok(None)
             }
         }
     }
