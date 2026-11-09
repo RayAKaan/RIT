@@ -378,7 +378,7 @@ fn valid_git_environment_override_is_used() {
         .unwrap();
     assert_eq!(
         json(&out)["inspection"]["location"],
-        repo.canonicalize().unwrap().to_string_lossy()
+        repo.canonicalize().unwrap().to_string_lossy().as_ref()
     );
 }
 #[test]
