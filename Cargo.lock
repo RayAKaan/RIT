@@ -644,11 +644,16 @@ dependencies = [
 name = "rit-storage"
 version = "0.1.0-dev.1"
 dependencies = [
+ "getrandom",
  "rit-core",
  "rusqlite",
  "rustix",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
+ "uuid",
+ "windows-sys",
 ]
 
 [[package]]
