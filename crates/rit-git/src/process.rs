@@ -185,24 +185,6 @@ impl Git {
         allow_exit_one: bool,
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let _diff_filter = if operation == "diff" {
-            diff_seccomp_filter()
-        } else {
-            None
-        };
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let mut cmd = if let Some(filter) = &_diff_filter {
-            let mut c = Command::new("/usr/bin/setpriv");
-            c.args(["--no-new-privs", "--seccomp-filter"])
-                .arg(filter.path())
-                .arg("--")
-                .arg(&self.executable);
-            c
-        } else {
-            Command::new(&self.executable)
-        };
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let mut cmd = Command::new(&self.executable);
         // All GIT_* variables can alter repository discovery/config/commands. Preserve normal OS environment.
         for (key, _) in std::env::vars_os() {
@@ -232,13 +214,27 @@ impl Git {
                 "core.untrackedCache=false",
             ]);
         if operation == "diff" {
+            // Prevent repository-controlled clean/smudge filters and textconv from
+            // executing during read-only worktree diff inspection.
             cmd.env("GIT_ATTR_NOSYSTEM", "1")
                 .arg("-c")
                 .arg(if cfg!(windows) {
                     "core.attributesFile=NUL"
                 } else {
                     "core.attributesFile=/dev/null"
-                });
+                })
+                .arg("-c")
+                .arg("filter.*.clean=")
+                .arg("-c")
+                .arg("filter.*.smudge=")
+                .arg("-c")
+                .arg("filter.*.process=")
+                .arg("-c")
+                .arg("diff.*.textconv=")
+                .arg("-c")
+                .arg("diff.*.command=")
+                .arg("-c")
+                .arg("diff.*.xfuncname=");
         }
         cmd.args(args)
             .stdin(if input.is_some() {
@@ -4457,50 +4453,6 @@ fn terminate(mut child: GroupChild) -> Result<(), GitError> {
 // A narrowly scoped mitigation, not a general process/filesystem sandbox: block
 // child process creation in Git's status/diff. Thread-style clone is allowed.
 // clone3 returns ENOSYS so glibc can fall back to clone for legitimate threads.
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn diff_seccomp_filter() -> Option<tempfile::NamedTempFile> {
-    use std::io::Write;
-    use std::os::unix::fs::MetadataExt;
-    let tool = std::fs::metadata("/usr/bin/setpriv").ok()?;
-    if !tool.is_file() || tool.uid() != 0 || tool.mode() & 0o022 != 0 {
-        return None;
-    }
-    // x86-64 seccomp BPF (native sock_filter layout). Unexpected arch => KILL_PROCESS.
-    // fork/vfork => EPERM, clone3 => ENOSYS, clone => EPERM unless CLONE_THREAD.
-    // This prevents repository-controlled clean filters/helpers during diff.
-    let program: [(u16, u8, u8, u32); 15] = [
-        (0x20, 0, 0, 4),
-        (0x15, 1, 0, 0xc000_003e),
-        (0x06, 0, 0, 0x8000_0000),
-        (0x20, 0, 0, 0),
-        (0x15, 0, 1, 57),
-        (0x06, 0, 0, 0x0005_0001),
-        (0x15, 0, 1, 58),
-        (0x06, 0, 0, 0x0005_0001),
-        (0x15, 0, 1, 435),
-        (0x06, 0, 0, 0x0005_0026),
-        (0x15, 0, 3, 56),
-        (0x20, 0, 0, 16),
-        (0x45, 1, 0, 0x0001_0000),
-        (0x06, 0, 0, 0x0005_0001),
-        (0x06, 0, 0, 0x7fff_0000),
-    ];
-    let mut f = tempfile::NamedTempFile::new().ok()?;
-    for (code, jt, jf, k) in program {
-        f.write_all(&code.to_ne_bytes()).ok()?;
-        f.write_all(&[jt, jf]).ok()?;
-        f.write_all(&k.to_ne_bytes()).ok()?;
-    }
-    f.flush().ok()?;
-    Some(f)
-}
-
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-#[allow(dead_code)]
-fn diff_seccomp_filter() -> Option<std::path::PathBuf> {
-    None
-}
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn workspace_target(dest: &Path) -> Result<PathBuf, GitError> {
