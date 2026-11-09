@@ -297,12 +297,12 @@ impl Git {
                 let result = loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break Ok(bytes),
-                        Ok(n) if bytes.len().saturating_add(n) <= limit => {
-                            bytes.extend_from_slice(&buf[..n])
-                        }
-                        Ok(_) => {
-                            flag.store(true, Ordering::Relaxed);
-                            break Err(());
+                        Ok(n) => {
+                            bytes.extend_from_slice(&buf[..n]);
+                            if bytes.len() > limit {
+                                flag.store(true, Ordering::Relaxed);
+                                break Err(());
+                            }
                         }
                         Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Err(_) => break Err(()),

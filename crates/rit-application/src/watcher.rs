@@ -132,6 +132,7 @@ impl ActivityWatcher {
             if !path.is_dir() {
                 continue;
             }
+            let path = path.canonicalize().unwrap_or(path);
             let id = managed
                 .workspaces
                 .iter()
@@ -144,12 +145,23 @@ impl ActivityWatcher {
                 .map(|m| m.manifest.id.to_string());
             roots.insert(path, id);
         }
-        for old in self.roots.keys().filter(|p| !roots.contains_key(*p)) {
-            self.watcher.unwatch(old).map_err(|e| e.to_string())?;
+        let stale = self
+            .roots
+            .keys()
+            .filter(|p| !roots.contains_key(*p))
+            .cloned()
+            .collect::<Vec<_>>();
+        for old in stale {
+            let _ = self.watcher.unwatch(&old);
         }
-        for new in roots.keys().filter(|p| !self.roots.contains_key(*p)) {
+        let fresh = roots
+            .keys()
+            .filter(|p| !self.roots.contains_key(*p))
+            .cloned()
+            .collect::<Vec<_>>();
+        for new in fresh {
             self.watcher
-                .watch(new, RecursiveMode::Recursive)
+                .watch(&new, RecursiveMode::Recursive)
                 .map_err(|e| e.to_string())?;
         }
         self.roots = roots;
