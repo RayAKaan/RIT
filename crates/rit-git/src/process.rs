@@ -3059,8 +3059,8 @@ impl Git {
             args.extend([
                 OsString::from("worktree"),
                 OsString::from("add"),
-                OsString::from("--detach"),
                 OsString::from("--no-checkout"),
+                OsString::from("--detach"),
                 target.as_os_str().into(),
                 op.base.as_hex().into(),
             ]);
