@@ -4527,13 +4527,11 @@ fn neutralize_all_attributes(cwd: &Path, git: &Git) -> Vec<DiffAttributesGuard> 
     for key in ["--absolute-git-dir", "--git-common-dir"] {
         if let Ok(dir) = git.query(cwd, &["rev-parse", key], "gitdir")
             && let Ok(guard) = write_neutral_attributes(Path::new(dir.trim()))
-        {
-            if !guards
+            && !guards
                 .iter()
                 .any(|g: &DiffAttributesGuard| g.path == guard.path)
-            {
-                guards.push(guard);
-            }
+        {
+            guards.push(guard);
         }
     }
     guards
