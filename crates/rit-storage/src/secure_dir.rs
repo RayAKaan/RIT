@@ -43,6 +43,7 @@ mod linux {
         pub path: PathBuf,
     }
     impl Guard {
+        #[allow(dead_code)]
         pub fn flush_dir(&self) -> Result<(), StorageError> {
             Ok(())
         }
@@ -225,29 +226,75 @@ mod linux {
 pub use linux::{Guard, prepare};
 
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub struct Guard {
-    pub path: std::path::PathBuf,
+mod other {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub struct Guard {
+        pub path: PathBuf,
+    }
+    pub struct LockGuard;
+    impl Guard {
+        pub fn lock_initialization(&self) -> Result<LockGuard, StorageError> {
+            Ok(LockGuard)
+        }
+        pub fn create_database_if_missing(&self) -> Result<bool, StorageError> {
+            let p = self.path.join("rit.sqlite3");
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+            {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e.into()),
+            }
+        }
+        #[allow(dead_code)]
+        pub fn flush_dir(&self) -> Result<(), StorageError> {
+            Ok(())
+        }
+        pub fn file_identity(&self, name: &str) -> Result<Option<String>, StorageError> {
+            let p = self.path.join(name);
+            match std::fs::metadata(&p) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.into()),
+                Ok(m) => {
+                    if !m.is_file() {
+                        return Err(err("storage object is not a regular file"));
+                    }
+                    Ok(None)
+                }
+            }
+        }
+    }
+    fn err(reason: &'static str) -> StorageError {
+        StorageError::UnsafeDirectory(reason)
+    }
+    pub fn prepare(input: &Path, create: bool) -> Result<Option<Guard>, StorageError> {
+        if input
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(err("parent traversal is not allowed"));
+        }
+        let path = if input.is_absolute() {
+            input.to_owned()
+        } else {
+            std::env::current_dir()?.join(input)
+        };
+        if !path.exists() {
+            if !create {
+                return Ok(None);
+            }
+            std::fs::create_dir_all(&path)?;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        Ok(Some(Guard { path }))
+    }
 }
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub struct LockGuard;
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-impl Guard {
-    pub fn lock_initialization(&self) -> Result<LockGuard, StorageError> {
-        Err(StorageError::UnsafeDirectory("unsupported platform"))
-    }
-    pub fn create_database_if_missing(&self) -> Result<bool, StorageError> {
-        Err(StorageError::UnsafeDirectory("unsupported platform"))
-    }
-    pub fn file_identity(&self, _name: &str) -> Result<Option<String>, StorageError> {
-        Err(StorageError::UnsafeDirectory("unsupported platform"))
-    }
-}
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub fn prepare(_input: &Path, _create: bool) -> Result<Option<Guard>, StorageError> {
-    Err(StorageError::UnsafeDirectory(
-        "secure storage is not implemented on this platform; no data was opened",
-    ))
-}
+pub use other::{Guard, LockGuard, prepare};
 // Windows native backend (experimental, Phase 2.1 remediation).
 #[cfg(target_os = "windows")]
 mod windows {

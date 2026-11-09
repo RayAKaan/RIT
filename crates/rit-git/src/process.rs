@@ -1340,7 +1340,7 @@ impl Git {
         let mut op=WorkspaceOperation{schema_version:1,id:op_id,workspace:id,kind:"workspace_create".into(),path:manifest.path.clone(),branch:branch.clone(),base:commit.clone(),state:"created".into(),failure:None,action:"inspect actual Git worktree and branch before any repair; never delete uncertain data".into()};
         let mut op_oid = self.write_json_ref(cwd, format, &op_ref, &op, &zero)?;
         let action = (|| -> Result<(), GitError> {
-            let old = self.workspace_write_manifest(cwd, &manifest, &zero)?;
+            let _manifest_old = self.workspace_write_manifest(cwd, &manifest, &zero)?;
             op.state = "manifest_reserved".into();
             op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
             let args = [
@@ -1369,7 +1369,16 @@ impl Git {
                         source,
                     })?;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                std::fs::DirBuilder::new()
+                    .create(&target)
+                    .map_err(|source| GitError::Path {
+                        path: target.clone(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 return Err(GitError::Unavailable(
                     "workspace path validation unavailable",
@@ -1414,7 +1423,7 @@ impl Git {
                 }
                 Err(e) => return Err(e),
             }
-            self.workspace_write_manifest(cwd, &manifest, old.as_hex())?;
+            self.workspace_write_manifest(cwd, &manifest, _manifest_old.as_hex())?;
             op.state = "completed".into();
             op.action = "none; reconcile before further lifecycle operations".into();
             op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
@@ -2978,6 +2987,7 @@ impl Git {
             self.run(Some(repo), &args, "workspace restore retain checkpoint")?;
             op.state = "checkpoint_retained".into();
             oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
+            #[cfg_attr(not(unix), allow(unused_variables))]
             let target = Path::new(&op.destination);
             #[cfg(unix)]
             {
@@ -2990,7 +3000,16 @@ impl Git {
                         source,
                     })?;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                std::fs::DirBuilder::new()
+                    .create(target)
+                    .map_err(|source| GitError::Path {
+                        path: target.into(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 return Err(GitError::Unavailable("restore path unavailable"));
             }
@@ -3303,7 +3322,16 @@ impl Git {
                         source,
                     })?;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                std::fs::DirBuilder::new()
+                    .create(&op.destination)
+                    .map_err(|source| GitError::Path {
+                        path: PathBuf::from(&op.destination),
+                        source,
+                    })?;
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 return Err(GitError::Unavailable("extraction unsupported"));
             }
@@ -3870,7 +3898,16 @@ impl Git {
                         source,
                     })?;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                std::fs::DirBuilder::new()
+                    .create(&target_path)
+                    .map_err(|source| GitError::Path {
+                        path: target_path.clone(),
+                        source,
+                    })?;
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 return Err(GitError::Unavailable("candidate path unavailable"));
             }
