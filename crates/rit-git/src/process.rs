@@ -335,6 +335,20 @@ impl Git {
             }
             thread::sleep(Duration::from_millis(5));
         }
+        if exceeded.load(Ordering::Relaxed) {
+            return Err(GitError::OutputLimit);
+        }
+        while let Ok((i, result)) = rx.try_recv() {
+            outputs[i] = Some(result);
+        }
+        let stderr = outputs[1]
+            .take()
+            .ok_or(GitError::Parse("stderr"))?
+            .map_err(|_| GitError::Parse("stderr read"))?;
+        let out = outputs[0]
+            .take()
+            .ok_or(GitError::Parse("stdout"))?
+            .map_err(|_| GitError::Parse("stdout read"))?;
         if let Some(writer) = writer {
             writer
                 .join()
@@ -349,19 +363,11 @@ impl Git {
                 code: status.code(),
             });
         }
-        let stderr = outputs[1]
-            .take()
-            .ok_or(GitError::Parse("stderr"))?
-            .map_err(|_| GitError::Parse("stderr read"))?;
         if operation == "conflict merge" && !stderr.is_empty() {
             return Err(GitError::Unavailable(
                 "merge simulation produced diagnostics, potentially from an unsupported driver",
             ));
         }
-        let out = outputs[0]
-            .take()
-            .ok_or(GitError::Parse("stdout"))?
-            .map_err(|_| GitError::Parse("stdout read"))?;
         Ok((out, code))
     }
     fn query(
