@@ -792,17 +792,13 @@ fn worktree_hashing_never_executes_repository_clean_filter() {
     fs::write(r.join("file.txt"), "change\n").unwrap();
     let git = Git::discover(None).unwrap();
     let result = git.diff(r);
-    let filter_blocked = matches!(
-        &result,
-        Err(rit_git::GitError::Launch(_))
-            | Err(rit_git::GitError::Exit {
-                operation: "diff",
-                ..
-            })
-    );
-    assert!(
-        result.is_ok() || filter_blocked,
-        "unexpected diff failure while checking clean-filter hardening: {result:?}"
-    );
+    match &result {
+        Ok(diff) => assert_eq!(
+            diff.unstaged.len(),
+            1,
+            "unexpected unstaged diff result: {diff:?}"
+        ),
+        Err(e) => panic!("diff failed while checking clean-filter hardening: {e:?}"),
+    }
     assert!(!marker.exists(), "repository filter was executed");
 }

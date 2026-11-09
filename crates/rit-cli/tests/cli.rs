@@ -884,7 +884,10 @@ fn filtered_workspace_is_real_but_explicitly_not_checked_out() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["workspace"]["state"], "no_checkout");
-    assert!(!marker.exists());
+    assert!(
+        !marker.exists(),
+        "repository smudge/clean filter executed during workspace creation"
+    );
     assert!(target.join(".git").exists());
     assert!(!target.join("example.txt").exists());
 }
