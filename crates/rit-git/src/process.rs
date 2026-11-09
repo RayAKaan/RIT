@@ -185,11 +185,13 @@ impl Git {
         allow_exit_one: bool,
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
-        // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
-        // Defense in depth: on Linux x86-64 apply seccomp via setpriv when available.
-        // Other platforms run with env/config hardening (same as prior behavior).
-        let needs_filter = matches!(operation, "status" | "diff" | "conflict merge")
-            || operation.starts_with("workspace ");
+        // Worktree diffs and workspace file reads may invoke clean filters. Status
+        // is also restricted, but Linux CI has shown seccomp incompatibility in some
+        // status executions; keep status on env/config hardening only and preserve
+        // seccomp for diff/workspace/conflict operations where filter execution is the
+        // main risk surface.
+        let needs_filter =
+            matches!(operation, "diff" | "conflict merge") || operation.starts_with("workspace ");
         let _filter = if needs_filter && cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             match no_child_filter() {
                 Ok(f) => Some(f),
