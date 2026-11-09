@@ -1,0 +1,9 @@
+# Repository management
+
+Repository identity is a persisted UUID v4; canonical Git common directory is the local deduplication key, not the public ID. Each checkout has a separate location and Git directory. A linked worktree shares the parent's common directory and ID; its own HEAD, index and files remain per worktree. Bare repositories have a bare location and no working-tree status. Submodules are discovered through Git like independent repositories, but submodule edge cases are not yet comprehensively verified.
+
+Registration inspects Git first, then atomically inserts/updates RIT metadata and a location. A repeat returns the same ID; the display name is preserved unless `--name` is supplied. A location already associated with another ID causes rollback. `rit init` is an alias for registration, not `git init`. `rit inspect` does not open the registry. Listing reads stored records; info and status are live observations, not cached Git truth.
+
+Missing locations are retained. ID-based info/status uses the first existing location and checks its common directory; stale or moved repositories require manual attention. Relocation and more sophisticated fallback are not implemented. Canonical path deduplication has filesystem race and move limitations and is not a global identity protocol. Registration rejects a data directory within the observed repository or Git directories, but that check is not an OS security boundary or a defense against adversarial path races.
+
+Phase 2.1: repository listing exposes filesystem-only `location_availability` observations via the application layer; a present path remains unverified until inspected. For ID-based live operations, locations are tried in stored order until one successfully inspects and its common Git directory matches the registered identity. A stale or repurposed earlier location does not hide a later valid one. This does not make inspection atomic with concurrent Git changes.

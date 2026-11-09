@@ -1,0 +1,699 @@
+{
+  "schema_version": 1,
+  "blockers": [
+    {
+      "id": "RIT-SEC-001",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Hot journal recovery",
+      "evidence": "Pre-gate SIGKILL acceptance failed RecoveryBlocked at crash_recovery.rs:119; after library fail-closed gate, unchanged test fails during fixture Registry::open at :44.",
+      "root_cause": "Read-only SQLite preflight cannot recover",
+      "dependencies": [],
+      "interim_behavior": "Writable registry and adoption fail before filesystem access; do not remove journals or regard the gate as a fix.",
+      "required_remediation": "Design independently bound writable recovery; keep journal intact",
+      "acceptance_criteria": "Hot-journal test passes including rollback, integrity, FK, new write and restart",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/tests/crash_recovery.rs"
+      ],
+      "reproduction_command": "cargo test --locked -p rit-storage --test crash_recovery marked_registry_recovers_hot_journal_after_killed_writer -- --nocapture",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Design independently bound writable recovery; keep journal intact"
+    },
+    {
+      "id": "RIT-SEC-002",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Database substitution and file identity",
+      "evidence": "Pre-gate unchanged substitution acceptance failed at registry.rs:395; after library gate it fails fixture Registry::open at :379. ext4 reused device/inode.",
+      "root_cause": "Marker and schema do not establish durable exact file identity",
+      "dependencies": [],
+      "interim_behavior": "Writable registry and adoption fail before filesystem access; no production bypass.",
+      "required_remediation": "Prove durable identity without SQLite lock/alias violations",
+      "acceptance_criteria": "Substitution, reuse, crash and race tests pass on supported filesystems",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/tests/registry.rs"
+      ],
+      "reproduction_command": "cargo test --locked -p rit-storage --test registry refuses_replaced_marked_database_even_if_schema_and_application_id_match -- --nocapture",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Prove durable identity without SQLite lock/alias violations"
+    },
+    {
+      "id": "RIT-SEC-003",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Protected manifest/state machine",
+      "evidence": "docs/RIT_DECISIONS.md describes only an unapproved proposal",
+      "root_cause": "No durable reservation, file binding or crash state protocol",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Design and implement durable protected binding and recovery with independent review",
+      "acceptance_criteria": "Every crash window fails closed or recovers safely",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/RIT_DECISIONS.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Design and implement durable protected binding and recovery with independent review"
+    },
+    {
+      "id": "RIT-SEC-004",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "macOS storage backend",
+      "evidence": "Non-Linux storage fails closed",
+      "root_cause": "No ACL-aware ancestry and file identity backend",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Implement macOS directory, ACL, file identity and sidecar protection",
+      "acceptance_criteria": "Native macOS adversarial, recovery and regression tests pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement macOS directory, ACL, file identity and sidecar protection"
+    },
+    {
+      "id": "RIT-SEC-005",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Windows storage backend",
+      "evidence": "Non-Linux storage fails closed",
+      "root_cause": "No DACL, reparse or file identity backend",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Implement Windows handle-based storage security",
+      "acceptance_criteria": "Native Windows SID/ACL/reparse/recovery tests pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement Windows handle-based storage security"
+    },
+    {
+      "id": "RIT-SEC-006",
+      "phase": "2.1",
+      "component": "rit-storage",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Legacy adoption",
+      "evidence": "Library and CLI adoption now fail closed before filesystem access; durable intent and consistent backup remain absent.",
+      "root_cause": "Crash-safe identity binding and backup missing",
+      "dependencies": [],
+      "interim_behavior": "Adoption unavailable, including the public Rust library path.",
+      "required_remediation": "Implement confirmed intent, SQLite backup API and recovery protocol",
+      "acceptance_criteria": "Fault-injected adoption preserves data and verifies backup",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/lib.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "rit-storage",
+      "required_implementation": "Implement confirmed intent, SQLite backup API and recovery protocol"
+    },
+    {
+      "id": "RIT-SEC-007",
+      "phase": "2.1",
+      "component": "storage security",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Independent security review",
+      "evidence": "No independent review performed",
+      "root_cause": "Threat-to-control evidence is incomplete",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Commission independent implementation and threat model review",
+      "acceptance_criteria": "All critical/high findings resolved with evidence",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/security/storage-threat-model.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "storage security",
+      "required_implementation": "Commission independent implementation and threat model review"
+    },
+    {
+      "id": "RIT-SEC-008",
+      "phase": "2.1",
+      "component": "Linux storage",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Linux adversarial validation",
+      "evidence": "Current handle/path boundary is experimental",
+      "root_cause": "ACL, mounts and concurrent directory replacement not fully proven",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Review Linux trust model and exercise second UID and races",
+      "acceptance_criteria": "Linux adversarial tests and review pass",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-storage/src/secure_dir.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "Linux storage",
+      "required_implementation": "Review Linux trust model and exercise second UID and races"
+    },
+    {
+      "id": "RIT-OPS-001",
+      "phase": "1-12",
+      "component": "delivery",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Remote authentication",
+      "evidence": "V6 read-only ls-remote succeeded; write permissions were not tested and no remote push or CI result is claimed.",
+      "root_cause": "No authorized GitHub credentials",
+      "dependencies": [],
+      "interim_behavior": "Existing failure is preserved; do not delete database journals.",
+      "required_remediation": "Publish ordered branches and open PRs without force push",
+      "acceptance_criteria": "Actual PR and CI status verified",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "docs/RIT_STATUS.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "delivery",
+      "required_implementation": "Publish ordered branches and open PRs without force push"
+    },
+    {
+      "id": "RIT-SEC-009",
+      "phase": "3",
+      "component": "identity and authorization",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Production identity and authorization unavailable",
+      "evidence": "Pure policy types exist; no production authenticator or service enforcement",
+      "root_cause": "Storage and authentication security gates incomplete",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "Do not claim release readiness; security-dependent new operations fail closed.",
+      "required_remediation": "Implement authenticated actor, secure credential lifecycle, central enforcement and transactional audit",
+      "acceptance_criteria": "Security negative paths and migration suite pass after storage remediation",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-application/src/contracts.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "identity and authorization",
+      "required_implementation": "Implement authenticated actor, secure credential lifecycle, central enforcement and transactional audit"
+    },
+    {
+      "id": "RIT-SEC-010",
+      "phase": "2-3",
+      "component": "existing repository commands",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Existing Phase 2 repository operations are unauthenticated",
+      "evidence": "Writable registry and adoption APIs now fail closed; remaining read-only registry inspection has no authenticated identity or protected provenance.",
+      "root_cause": "No production identity/authz enforcement exists",
+      "dependencies": [],
+      "interim_behavior": "Do not use the experimental registry for valuable data or claim authenticated authorization.",
+      "required_remediation": "Integrate common authenticated service boundary without breaking safe Git inspection",
+      "acceptance_criteria": "Every protected route denies unauthenticated or unauthorized calls",
+      "verification": "Run locked workspace tests and relevant platform-native security/fault-injection tests; retain failures until fixed.",
+      "files": [
+        "crates/rit-application/src/lib.rs"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "existing repository commands",
+      "required_implementation": "Integrate common authenticated service boundary without breaking safe Git inspection"
+    },
+    {
+      "id": "RIT-P04-001",
+      "phase": "4",
+      "component": "workspace/isolation",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Validated workspace operations and OS isolation",
+      "evidence": "V6 removal preview and competing-create tests are implemented; removal stays disabled. Git-ref claims do not fence unrelated same-user processes or prove identity.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Only bounded cooperative worktrees; no removal, arbitrary execution or sandbox claim. Git manifests are unauthenticated.",
+      "required_remediation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits",
+      "acceptance_criteria": "Native isolation escape/resource/cleanup tests",
+      "verification": "Native isolation escape/resource/cleanup tests",
+      "files": [
+        "docs/phases/phase-4-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "workspace/isolation",
+      "required_implementation": "Implement worktree lifecycle, safe cleanup, platform sandbox and enforced limits",
+      "v5_update": "V5 CAS-backed provisioning intent and metadata-only repair exist; removal/move stay disabled, no worktree sandbox."
+    },
+    {
+      "id": "RIT-P05-001",
+      "phase": "5",
+      "component": "activity",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Activity source and reconciliation",
+      "evidence": "V6 replaces the watcher restart channel and marks gaps; baseline failed once but isolated repetitions passed. Events remain bounded, lossy, process-local and unauthenticated.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Live notifications and reconciliation are ephemeral, may lose events, and cannot prove conflict or actor identity.",
+      "required_remediation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation",
+      "acceptance_criteria": "Real Git changes, restart and event-loss tests",
+      "verification": "Real Git changes, restart and event-loss tests",
+      "files": [
+        "docs/phases/phase-5-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "activity",
+      "required_implementation": "Implement authorized Git-backed observation, loss-aware watcher and reconciliation",
+      "v5_update": "V5 emits actual bounded endpoint HEAD/index/lock transitions and explicit watcher loss; durable complete event history remains absent."
+    },
+    {
+      "id": "RIT-P06-001",
+      "phase": "6",
+      "component": "checkpoint",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Safe capture, restore and retention",
+      "evidence": "V6 adds bounded schema-3 capture budgets, schema-2 compatibility test and recoverable selected extraction into an exclusively new directory. Capture remains incomplete/non-atomic; no automatic resume, in-place restore or retention collection.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-001"
+      ],
+      "interim_behavior": "Always incomplete/non-atomic, files may be sensitive; restore and deletion disabled.",
+      "required_remediation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies",
+      "acceptance_criteria": "Disposable Git integration, crash, conflict and special-file tests",
+      "verification": "Disposable Git integration, crash, conflict and special-file tests",
+      "files": [
+        "docs/phases/phase-6-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "checkpoint",
+      "required_implementation": "Implement secure content storage, completeness, integrity, transactional restore and edge policies",
+      "v5_update": "V5 subset new-worktree recovery and raw-index verification exist; incomplete non-atomic snapshots, fixed limits, unretained LFS/submodules, no resume or in-place restore remain."
+    },
+    {
+      "id": "RIT-P07-001",
+      "phase": "7",
+      "component": "integration",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Queue and atomic ref publication",
+      "evidence": "V6 fails candidate validation on stale target and actual Git fsck errors and preserves ID after partial creation; no authorized execution, review or publication.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "No approval, execution or publication; candidate and metadata are not isolated/authenticated.",
+      "required_remediation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation",
+      "acceptance_criteria": "Concurrent target changes, retries, source preservation and failure injection",
+      "verification": "Concurrent target changes, retries, source preservation and failure injection",
+      "files": [
+        "docs/phases/phase-7-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "integration",
+      "required_implementation": "Implement authenticated durable queue, candidate, validation, approval, CAS and crash reconciliation",
+      "v5_update": "V5 candidate step recording, cancellation and reconciliation exist; no automatic recovery/cleanup, protected review or publication."
+    },
+    {
+      "id": "RIT-P08-001",
+      "phase": "8",
+      "component": "conflict",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Semantic conflict analysis",
+      "evidence": "V6 adds advisory changed-importer/dependency evidence alongside actual Git merge results. Resolution and complete semantic analysis remain unavailable.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Advisory only; no resolution, Mergiraf or automatic apply.",
+      "required_remediation": "Implement tested tree-sitter/Mergiraf adapters, text conflict analysis and human review",
+      "acceptance_criteria": "Language fixtures and no-overwrite integration tests",
+      "verification": "Language fixtures and no-overwrite integration tests",
+      "files": [
+        "docs/phases/phase-8-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "conflict",
+      "required_implementation": "Implement tested tree-sitter/Mergiraf adapters, text conflict analysis and human review"
+    },
+    {
+      "id": "RIT-P09-001",
+      "phase": "9",
+      "component": "impact",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Evidence extraction and impact coverage",
+      "evidence": "V6 adds real stage-0 index blob graph and evidence-based heuristic impact/test links with concurrent recheck; non-atomic and incomplete.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Graphs report incomplete, live observations non-atomic and staleable.",
+      "required_remediation": "Implement versioned source extraction, symbol/API mapping and test/workspace recommendations",
+      "acceptance_criteria": "Real repository fixtures, stale/partial evidence and language coverage tests",
+      "verification": "Real repository fixtures, stale/partial evidence and language coverage tests",
+      "files": [
+        "docs/phases/phase-9-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "impact",
+      "required_implementation": "Implement versioned source extraction, symbol/API mapping and test/workspace recommendations"
+    },
+    {
+      "id": "RIT-P10-001",
+      "phase": "10",
+      "component": "protocol",
+      "severity": "critical",
+      "status": "deferred",
+      "title": "Authenticated privileged tool routes",
+      "evidence": "V6 exposes fifteen opt-in fixed-scope read-only MCP views with Python and TypeScript stdio interop; privileged routes and authenticated isolation remain disabled.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Explicit same-OS-user scope only; no caller-supplied paths, mutation, execution or HTTP; not authentication/sandbox.",
+      "required_remediation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs",
+      "acceptance_criteria": "Adversarial authorization and Rust/TS/Python interoperability tests",
+      "verification": "Adversarial authorization and Rust/TS/Python interoperability tests",
+      "files": [
+        "docs/phases/phase-10-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "protocol",
+      "required_implementation": "Connect every route and tool to authenticated centralized authorization; add secure versioned APIs and SDKs",
+      "v5_update": "V5 has thirteen opt-in scoped read-only MCP views; scope is not authenticated authorization."
+    },
+    {
+      "id": "RIT-P11-001",
+      "phase": "11",
+      "component": "collaboration/reliability",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Persistent collaboration and reliability suite",
+      "evidence": "V6 adds a real 35-step bounded diagnostic, with 9 blocked and 11 partial steps; durable tasks, authenticated audit and full workflow remain unavailable.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "No durable collaboration or production reliability claims.",
+      "required_remediation": "Implement candidate-bound reviews, operations, backup/reconciliation and failure/concurrency harness",
+      "acceptance_criteria": "End-to-end, fault-injection, backup, recovery and benchmark evidence",
+      "verification": "End-to-end, fault-injection, backup, recovery and benchmark evidence",
+      "files": [
+        "docs/phases/phase-11-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "collaboration/reliability",
+      "required_implementation": "Implement candidate-bound reviews, operations, backup/reconciliation and failure/concurrency harness"
+    },
+    {
+      "id": "RIT-P12-001",
+      "phase": "12",
+      "component": "release",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Native support and release verification",
+      "evidence": "V6 adds a small reproducible Linux benchmark and local release build checks; native macOS/Windows security execution and remote CI/release remain unverified.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-004"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Perform native testing, independent security review, migrations, packaging and release checks",
+      "acceptance_criteria": "Document native results and passing release/security gates",
+      "verification": "Document native results and passing release/security gates",
+      "files": [
+        "docs/phases/phase-12-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "release",
+      "required_implementation": "Perform native testing, independent security review, migrations, packaging and release checks"
+    },
+    {
+      "id": "RIT-P10-002",
+      "phase": "10",
+      "component": "typescript sdk",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "TypeScript validation and interoperability",
+      "evidence": "V6 local strict TypeScript compilation and scoped Node interoperability pass, but package/distribution/full MCP conformance and authenticated behavior remain unverified.",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-P10-001"
+      ],
+      "interim_behavior": "Local opt-in read-only scope only.",
+      "required_remediation": "Typecheck and run against stdio transport with protocol/error fixtures",
+      "acceptance_criteria": "Automated TypeScript SDK interoperability tests",
+      "verification": "Automated TypeScript SDK interoperability tests",
+      "files": [
+        "docs/phases/phase-10-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "typescript sdk",
+      "required_implementation": "Typecheck and run against stdio transport with protocol/error fixtures"
+    },
+    {
+      "id": "RIT-P03-001",
+      "phase": "3",
+      "component": "audit/authentication",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Actor construction and audit anchoring",
+      "evidence": "ActorContext has no external construction path; chain cannot detect tail truncation or full rewrite",
+      "root_cause": "Provider and implementation or verification not yet delivered.",
+      "dependencies": [
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Unimplemented privileged operations are unavailable; pure models make no operational guarantees.",
+      "required_remediation": "Design safe provider-issued authenticated context and independently protected audit anchors",
+      "acceptance_criteria": "Forgery, revocation, atomic audit and truncation/rollback tests",
+      "verification": "Forgery, revocation, atomic audit and truncation/rollback tests",
+      "files": [
+        "docs/phases/phase-3-report.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "audit/authentication",
+      "required_implementation": "Design safe provider-issued authenticated context and independently protected audit anchors"
+    },
+    {
+      "id": "RIT-OPS-002",
+      "phase": "10-12",
+      "component": "handoff history",
+      "severity": "medium",
+      "status": "deferred",
+      "title": "Full-history export contains temporary bytecode and environment paths",
+      "evidence": "Original history remains unchanged and includes historical bytecode/local paths. A separately rewritten selective-redaction export must be independently verified and is not the sole source of truth.",
+      "root_cause": "Generated files were staged before ignore rules; historical evidence recorded environment paths.",
+      "dependencies": [],
+      "interim_behavior": "Export a sanitized, topology-preserving history with changed commit hashes and a separate commit map; keep original history private until reviewed.",
+      "required_remediation": "Obtain owner decision and review before full-history distribution, or use an independently audited history-redaction procedure with explicit authorization.",
+      "acceptance_criteria": "All reachable export objects and branches pass content scanning and clone verification; explicit review before publishing original unredacted history.",
+      "verification": "Inspect every reachable object and archive entry, run bundle verification, and verify exact contents before distribution.",
+      "files": [
+        ".gitignore",
+        "docs/handoff/LOCAL_AGENT_REMEDIATION_REPORT.md"
+      ],
+      "reproduction_command": "See linked phase report and cargo test --locked --workspace --all-targets --no-fail-fast.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "handoff history",
+      "required_implementation": "Obtain owner decision and review before full-history distribution, or use an independently audited history-redaction procedure with explicit authorization."
+    },
+    {
+      "id": "RIT-P01-001",
+      "phase": "1",
+      "component": "canonical domain and operations",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Canonical events, identifiers and recoverable operations",
+      "evidence": "Typed IDs exist for some entities and Git OIDs; common event envelope, operation protocol, timestamps and canonical relationship coverage are absent.",
+      "root_cause": "The original foundation did not implement all v2 cross-phase models.",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "No durable new workflow or event processing is claimed.",
+      "required_remediation": "Add versioned typed entities, validated relationships, UTC timestamps, operation IDs, events, recovery state and schema migrations.",
+      "required_implementation": "Add versioned typed entities, validated relationships, UTC timestamps, operation IDs, events, recovery state and schema migrations.",
+      "acceptance_criteria": "Model and transition tests plus real restart/recovery and interface serialization tests.",
+      "verification": "Model and transition tests plus real restart/recovery and interface serialization tests.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "canonical domain and operations",
+      "files": [
+        "crates/rit-core/src/lib.rs"
+      ]
+    },
+    {
+      "id": "RIT-P02-001",
+      "phase": "2",
+      "component": "Git repository service",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Complete Git visibility and safe repository lifecycle",
+      "evidence": "V3 exposes path-based read-only inspect/status, refs, tags, log, tracked diff, worktree inventory and doctor; lifecycle/relocation and broader portability remain incomplete.",
+      "root_cause": "Only a subset of the v2 Git service was implemented.",
+      "dependencies": [
+        "RIT-SEC-001",
+        "RIT-SEC-002"
+      ],
+      "interim_behavior": "Git >=2.46; no unauthenticated registry writes.",
+      "required_remediation": "Implement missing read-only inspection plus authenticated safe registration, relocation and unregister after storage gates.",
+      "required_implementation": "Implement missing read-only inspection plus authenticated safe registration, relocation and unregister after storage gates.",
+      "acceptance_criteria": "Disposable bare/worktree/shallow/sha256, all porcelain records, path and multiprocess tests.",
+      "verification": "Disposable bare/worktree/shallow/sha256, all porcelain records, path and multiprocess tests.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "Git repository service",
+      "files": [
+        "crates/rit-git/src/process.rs"
+      ]
+    },
+    {
+      "id": "RIT-P10-003",
+      "phase": "10",
+      "component": "MCP protocol compliance",
+      "severity": "high",
+      "status": "deferred",
+      "title": "MCP modern/legacy discovery subset is not full conformance",
+      "evidence": "Legacy/modern discovery subset and ten scoped read-only views; full base protocol and official conformance suite remain absent.",
+      "root_cause": "Protocol server is a bounded partial prototype.",
+      "dependencies": [
+        "RIT-P10-001"
+      ],
+      "interim_behavior": "Do not claim full MCP conformance or privileged access.",
+      "required_remediation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
+      "required_implementation": "Implement full supported-version lifecycle/base patterns and official interop/conformance tests without enabling unauthorized tools.",
+      "acceptance_criteria": "Version negotiation, errors, notifications, cancellation and real official-client interoperability tests pass.",
+      "verification": "Version negotiation, errors, notifications, cancellation and real official-client interoperability tests pass.",
+      "reproduction_command": "cargo test --locked --workspace --all-targets --no-fail-fast; inspect linked source and phase report.",
+      "verification_environment": "Linux x86-64 local only; native macOS/Windows and independent review pending.",
+      "responsible_future_workstream": "MCP protocol compliance",
+      "files": [
+        "crates/rit-protocol/src/lib.rs"
+      ]
+    },
+    {
+      "id": "RIT-V4-001",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Git child-process restrictions and native portability",
+      "evidence": "Status, diff, worktree, checkpoint and merge mitigations rely on Linux x86-64 seccomp and trusted setpriv; no independent security review or native platform testing.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Adversarially review and test process restrictions and safe alternatives on Linux, Windows and macOS; retain fail-closed behavior.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Adversarially review and test process restrictions and safe alternatives on Linux, Windows and macOS; retain fail-closed behavior."
+    },
+    {
+      "id": "RIT-V4-002",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Unauthenticated Git metadata and same-user races",
+      "evidence": "Workspace, checkpoint, submission and candidate refs can be edited by the repository owner; same-user and filesystem races are not independently reviewed.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Establish authenticated coordination and protected audit with reviewed crash-safe identity, or continue to describe data as unauthenticated and non-sandboxed.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Establish authenticated coordination and protected audit with reviewed crash-safe identity, or continue to describe data as unauthenticated and non-sandboxed."
+    },
+    {
+      "id": "RIT-V4-003",
+      "phase": "V4",
+      "component": "cross-phase safety",
+      "severity": "high",
+      "status": "deferred",
+      "title": "Incomplete integration candidate recovery",
+      "evidence": "Interrupted creation can leave manifests, refs, object data and directories; candidate creation and static checks are not transactional.",
+      "root_cause": "Implementation and independent native validation remain incomplete.",
+      "dependencies": [
+        "RIT-SEC-007",
+        "RIT-SEC-009"
+      ],
+      "interim_behavior": "Fail closed for unsupported or privileged operations; report partial results and never claim authentication.",
+      "required_remediation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance.",
+      "acceptance_criteria": "Independent security review and native adversarial/fault-injection acceptance.",
+      "verification": "Run focused and full locked tests plus native platform fault-injection; retain evidence.",
+      "files": [
+        "docs/handoff/V4_IMPLEMENTATION_AUDIT.md"
+      ],
+      "reproduction_command": "See V4_IMPLEMENTATION_AUDIT.md and V4_FINAL_REPORT.md",
+      "verification_environment": "Linux x86-64 local only; native Windows/macOS not run.",
+      "responsible_future_workstream": "cross-phase safety",
+      "required_implementation": "Design reviewed interruption recovery, stale checks, resource bounds and non-destructive cleanup before any publication or production acceptance.",
+      "v5_update": "V5 records candidate provisioning steps and rediscovers SIGKILL interruption; no automatic recovery or cleanup, and no cross-ref atomicity."
+    }
+  ],
+  "v6_status": {
+    "overall_acceptance": "blocked",
+    "storage_gate": "preserved",
+    "full_workflow": "15 pass, 11 partial, 9 blocked",
+    "validation_environment": "Linux x86-64 only",
+    "next_phase": "trusted-storage design and adversarial native review precede production identity and publication"
+  }
+}

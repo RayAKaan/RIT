@@ -1,0 +1,3 @@
+# Coding standards
+
+Keep modules focused and dependency direction explicit. Document public contracts and failure modes. Use typed errors with sources; do not panic for input, filesystem or environment failures. Avoid exposing secret input through logs, debug output or error messages. Use structured logs on stderr; keep machine output on stdout. Validate external data and paths. Avoid unsafe code, unnecessary dependencies, speculative abstractions, fake success, TODO implementations and untested claims. Add unit, negative-path and integration tests with each change; review lockfile and license implications for every dependency.

@@ -1,0 +1,3 @@
+# Phase 12 — release foundations
+
+Existing configuration, diagnostics, logging, pinned Cargo manifests, Rust toolchain and CI matrix remain; status, handoff, deferred blockers, platform setup and a 26-step future end-to-end plan document the actual state. Builds and tests are reported separately in the status document. This is not a release: no production package, migration system, benchmark evidence, native macOS/Windows validation, independent security review, remote CI or end-to-end acceptance. Cross-compilation/build configuration is not native support. Unavailable operations remain unavailable.

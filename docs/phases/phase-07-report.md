@@ -1,0 +1,3 @@
+# Phase 7 — integration foundation
+
+Typed submissions connect repository, workspace, author, base, target, source and candidate. A pure dry-run compares the caller-supplied target with the expected value but is never executable; publication provider and CLI are disabled. No durable queue, candidate creation, validation, approval, compare-and-swap, retries or crash recovery is implemented. Before publication, enforce authorization, source preservation, validation/approval binding, guarded Git ref updates and reconciliation across independent systems; no atomic transaction spanning Git, SQLite and remote is claimed.

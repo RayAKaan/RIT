@@ -1,0 +1,17 @@
+[package]
+name = "rit-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rit-core = { path = "../rit-core" }
+serde.workspace = true
+thiserror.workspace = true
+sha2 = "0.10.9"
+tree-sitter = "=0.25.10"
+tree-sitter-python = "=0.25.0"
+tree-sitter-go = "=0.25.0"
+tree-sitter-typescript = "=0.23.2"
