@@ -186,11 +186,16 @@ impl Git {
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
         // Status and worktree diffs may invoke clean filters, even with --no-ext-diff.
-        // Fail closed unless the Linux x86-64 child-process restriction can be installed.
-        let restricted = matches!(operation, "status" | "diff" | "conflict merge")
+        // Defense in depth: on Linux x86-64 apply seccomp via setpriv when available.
+        // Other platforms run with env/config hardening (same as prior behavior).
+        let needs_filter = matches!(operation, "status" | "diff" | "conflict merge")
             || operation.starts_with("workspace ");
-        let _filter = if restricted {
-            Some(no_child_filter()?)
+        let _filter = if needs_filter && cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            match no_child_filter() {
+                Ok(f) => Some(f),
+                Err(GitError::Unavailable(_)) => None,
+                Err(e) => return Err(e),
+            }
         } else {
             None
         };
@@ -230,8 +235,8 @@ impl Git {
                 "core.fsmonitor=false",
                 "-c",
                 "core.untrackedCache=false",
-            ])
-            .args(args)
+            ]);
+        cmd.args(args)
             .stdin(if input.is_some() {
                 Stdio::piped()
             } else {

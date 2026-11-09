@@ -625,6 +625,11 @@ mod connection_tests {
     #[test]
     fn actual_registry_connection_enforces_foreign_keys() {
         let tmp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let registry = Registry::open(tmp.path()).unwrap();
         let enabled: i64 = registry
             .connection

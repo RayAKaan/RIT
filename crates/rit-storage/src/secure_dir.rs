@@ -294,7 +294,7 @@ mod other {
     }
 }
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub use other::{Guard, LockGuard, prepare};
+pub use other::{Guard, prepare};
 // Windows native backend (experimental, Phase 2.1 remediation).
 #[cfg(target_os = "windows")]
 mod windows {
