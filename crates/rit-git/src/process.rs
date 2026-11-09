@@ -185,64 +185,146 @@ impl Git {
         allow_exit_one: bool,
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let _filter: Option<tempfile::NamedTempFile> = if operation == "diff" {
-            // Best-effort: block child-process creation during diff so repo-controlled
-            // clean filters/helpers cannot execute. If setpriv/BPF setup is unavailable,
-            // diff remains env-hardened (attributes file disabled below).
-            (|| -> Option<tempfile::NamedTempFile> {
-                use std::io::Write;
-                use std::os::unix::fs::MetadataExt;
-                let tool = std::fs::metadata("/usr/bin/setpriv").ok()?;
-                if !tool.is_file() || tool.uid() != 0 || tool.mode() & 0o022 != 0 {
-                    return None;
-                }
-                // x86-64 seccomp BPF: load arch, kill if unexpected; load nr.
-                // fork(57)/vfork(58)=>EPERM, clone3(435)=>ENOSYS, clone(56)=>EPERM unless CLONE_THREAD.
-                let program: [(u16, u8, u8, u32); 15] = [
-                    (0x20, 0, 0, 4),          // ld [4] arch
-                    (0x15, 1, 0, 0xc000003e), // jeq AUDIT_ARCH_X86_64, ok, kill
-                    (0x06, 0, 0, 0x80000000), // kill
-                    (0x20, 0, 0, 0),          // ld [0] nr
-                    (0x15, 0, 1, 57),         // fork
-                    (0x06, 0, 0, 0x00050001), // EPERM
-                    (0x15, 0, 1, 58),         // vfork
-                    (0x06, 0, 0, 0x00050001), // EPERM
-                    (0x15, 0, 1, 435),        // clone3
-                    (0x06, 0, 0, 0x00050026), // ENOSYS
-                    (0x15, 0, 3, 56),         // clone -> check flags else allow
-                    (0x20, 0, 0, 16),         // ld args[0] low32 (flags)
-                    (0x45, 1, 0, 0x00010000), // jset CLONE_THREAD -> allow
-                    (0x06, 0, 0, 0x00050001), // EPERM
-                    (0x06, 0, 0, 0x7fff0000), // ALLOW
-                ];
-                let mut f = tempfile::NamedTempFile::new().ok()?;
-                for (code, jt, jf, k) in program {
-                    f.write_all(&code.to_ne_bytes()).ok()?;
-                    f.write_all(&[jt, jf]).ok()?;
-                    f.write_all(&k.to_ne_bytes()).ok()?;
-                }
-                f.flush().ok()?;
-                Some(f)
-            })()
-        } else {
-            None
-        };
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let _filter: Option<std::path::PathBuf> = None;
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let mut cmd = if let Some(filter) = &_filter {
-            let mut c = Command::new("/usr/bin/setpriv");
-            c.args(["--no-new-privs", "--seccomp-filter"])
-                .arg(filter.path())
-                .arg("--")
-                .arg(&self.executable);
-            c
-        } else {
-            Command::new(&self.executable)
-        };
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let mut cmd = Command::new(&self.executable);
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if operation == "diff" {
+            use std::os::unix::process::CommandExt;
+            // Block child-process creation during diff so repository-controlled
+            // clean filters/helpers cannot execute. Allow thread-style clone/fork
+            // patterns needed by runtimes; unexpected arch is killed.
+            #[repr(C)]
+            struct SockFilter {
+                code: u16,
+                jt: u8,
+                jf: u8,
+                k: u32,
+            }
+            #[repr(C)]
+            struct SockFprog {
+                len: u16,
+                filter: *const SockFilter,
+            }
+            unsafe extern "C" {
+                safe fn prctl(option: i32, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> i32;
+            }
+            const PR_SET_NO_NEW_PRIVS: i32 = 38;
+            const PR_SET_SECCOMP: i32 = 22;
+            const SECCOMP_MODE_FILTER: u64 = 2;
+            static FILTER: [SockFilter; 15] = [
+                SockFilter {
+                    code: 0x20,
+                    jt: 0,
+                    jf: 0,
+                    k: 4,
+                }, // arch
+                SockFilter {
+                    code: 0x15,
+                    jt: 1,
+                    jf: 0,
+                    k: 0xc000003e,
+                }, // x86_64
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x80000000,
+                }, // kill
+                SockFilter {
+                    code: 0x20,
+                    jt: 0,
+                    jf: 0,
+                    k: 0,
+                }, // nr
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 1,
+                    k: 57,
+                }, // fork
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x00050001,
+                }, // EPERM
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 1,
+                    k: 58,
+                }, // vfork
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x00050001,
+                }, // EPERM
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 1,
+                    k: 435,
+                }, // clone3
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x00050026,
+                }, // ENOSYS
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 3,
+                    k: 56,
+                }, // clone
+                SockFilter {
+                    code: 0x20,
+                    jt: 0,
+                    jf: 0,
+                    k: 16,
+                }, // flags low32
+                SockFilter {
+                    code: 0x45,
+                    jt: 1,
+                    jf: 0,
+                    k: 0x00010000,
+                }, // CLONE_THREAD
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x00050001,
+                }, // EPERM
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x7fff0000,
+                }, // ALLOW
+            ];
+            unsafe {
+                cmd.pre_exec(|| {
+                    let prog = SockFprog {
+                        len: FILTER.len() as u16,
+                        filter: FILTER.as_ptr(),
+                    };
+                    if prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if prctl(
+                        PR_SET_SECCOMP,
+                        SECCOMP_MODE_FILTER,
+                        &prog as *const _ as u64,
+                        0,
+                        0,
+                    ) != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         // All GIT_* variables can alter repository discovery/config/commands. Preserve normal OS environment.
         for (key, _) in std::env::vars_os() {
             if key
