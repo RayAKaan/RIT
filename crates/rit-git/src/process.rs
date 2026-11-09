@@ -4497,6 +4497,7 @@ fn diff_seccomp_filter() -> Option<tempfile::NamedTempFile> {
 }
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[allow(dead_code)]
 fn diff_seccomp_filter() -> Option<std::path::PathBuf> {
     None
 }

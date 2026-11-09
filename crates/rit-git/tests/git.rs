@@ -791,19 +791,18 @@ fn worktree_hashing_never_executes_repository_clean_filter() {
     run(r, &["config", "filter.evil.clean", &filter]);
     fs::write(r.join("file.txt"), "change\n").unwrap();
     let git = Git::discover(None).unwrap();
-    let _result = git.diff(r);
-    // Linux x86-64 CI applies a no-child seccomp filter to diff. If that
-    // environment cannot apply it, Git may still invoke repo-configured helpers;
-    // treat execution as a platform limitation, not a silent pass.
-    if marker.exists() {
-        let can_filter = Command::new("/usr/bin/setpriv")
-            .args(["--help"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        assert!(
-            !can_filter,
-            "repository filter was executed despite available setpriv hardening"
-        );
-    }
+    let result = git.diff(r);
+    let filter_blocked = matches!(
+        &result,
+        Err(rit_git::GitError::Launch(_))
+            | Err(rit_git::GitError::Exit {
+                operation: "diff",
+                ..
+            })
+    );
+    assert!(
+        result.is_ok() || filter_blocked,
+        "unexpected diff failure while checking clean-filter hardening: {result:?}"
+    );
+    assert!(!marker.exists(), "repository filter was executed");
 }
