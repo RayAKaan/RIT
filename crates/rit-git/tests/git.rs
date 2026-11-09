@@ -145,7 +145,7 @@ fn timeout_and_output_limit_are_enforced() {
     ));
     fs::write(
         &script,
-        format!("{base}if echo \" $* \" | grep -q ' status '; then yes x 2>/dev/null | head -c 12000; printf '\\n'; exit 0; fi\necho 'ok'\n"),
+        format!("{base}if echo \" $* \" | grep -q ' status '; then perl -e 'print \"x\" x 12000'; exit 0; fi\necho 'ok'\n"),
     )
     .unwrap();
     let git = Git::discover(Some(script.as_os_str()))

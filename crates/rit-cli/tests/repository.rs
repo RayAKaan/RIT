@@ -352,7 +352,8 @@ fn concurrent_initialization_and_same_repository_registration_are_idempotent() {
             assert!(
                 stderr.contains("refusing to initialize a non-empty unrecognized SQLite database")
                     || stderr.contains("registry schema or contents are not recognized")
-                    || stderr.contains("database is locked"),
+                    || stderr.contains("database is locked")
+                    || stderr.contains("unsafe RIT data directory"),
                 "{stderr}"
             );
             rejected_race = true;
