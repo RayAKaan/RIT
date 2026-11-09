@@ -367,7 +367,7 @@ fn unknown_empty_database_is_not_automatically_initialized() {
     assert_eq!(std::fs::read(&p).unwrap(), before);
 }
 
-# [cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn refuses_replaced_marked_database_even_if_schema_and_application_id_match() {
     // Both files are clean SQLite databases and both connections have closed

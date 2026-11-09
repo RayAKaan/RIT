@@ -35,8 +35,12 @@ pub fn random_token_hex() -> Result<String, StorageError> {
     let mut b = [0u8; 32];
     getrandom::fill(&mut b).map_err(|_| StorageError::UnsafeDirectory("CSPRNG unavailable"))?;
     let mut s = String::with_capacity(64);
-    for x in b { s.push_str(&format!("{x:02x}")); }
+    for x in b {
+        s.push_str(&format!("{x:02x}"));
+    }
     Ok(s)
 }
 
-pub fn new_db_uuid() -> String { uuid::Uuid::new_v4().to_string() }
+pub fn new_db_uuid() -> String {
+    uuid::Uuid::new_v4().to_string()
+}

@@ -19,5 +19,9 @@ fn write_paths_are_not_security_gate_blocked_and_fail_safely() {
     let before = std::fs::read(&file).unwrap();
     assert!(Registry::open(&existing).is_err());
     assert!(rit_storage::adopt_legacy(&existing, true).is_err());
-    assert_eq!(std::fs::read(&file).unwrap(), before, "unrelated database bytes must not be mutated");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        before,
+        "unrelated database bytes must not be mutated"
+    );
 }

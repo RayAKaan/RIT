@@ -255,7 +255,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "rit-nonexistent-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(":", "_")
         ));
         let defaults = Overrides::default();
         let optional = ConfigFile {

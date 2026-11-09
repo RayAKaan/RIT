@@ -1,14 +1,33 @@
 //! Experimental local storage boundary. Unsupported platforms fail closed.
-#[cfg(any(target_os="linux",target_os="windows",all(not(target_os="linux"),not(target_os="windows"))))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    all(not(target_os = "linux"), not(target_os = "windows"))
+))]
 #[allow(unused_imports)]
 use crate::StorageError;
-#[cfg(any(target_os="linux",target_os="windows",all(not(target_os="linux"),not(target_os="windows"))))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    all(not(target_os = "linux"), not(target_os = "windows"))
+))]
 #[allow(unused_imports)]
 use std::path::Path;
-#[cfg(any(target_os = "linux", target_os = "windows", all(not(target_os = "linux"), not(target_os = "windows"))))]
-#[cfg(any(target_os = "linux", target_os = "windows", all(not(target_os = "linux"), not(target_os = "windows"))))]
-#[cfg(any(target_os="linux", target_os="windows", all(not(target_os="linux"), not(target_os="windows"))))]
-
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    all(not(target_os = "linux"), not(target_os = "windows"))
+))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    all(not(target_os = "linux"), not(target_os = "windows"))
+))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    all(not(target_os = "linux"), not(target_os = "windows"))
+))]
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
@@ -76,9 +95,16 @@ mod linux {
                 Err(Errno::NOENT) => Ok(None),
                 Err(e) => Err(std::io::Error::from(e).into()),
                 Ok(s) => {
-                    if s.st_mode & 0o170000 != 0o100000 { return Err(err("storage object is not a regular file")); }
-                    if s.st_uid != rustix::process::geteuid().as_raw() { return Err(err("storage object not owned by effective user")); }
-                    Ok(Some(format!("dev:{:x}:ino:{:x}:nlink:{}", s.st_dev, s.st_ino, s.st_nlink)))
+                    if s.st_mode & 0o170000 != 0o100000 {
+                        return Err(err("storage object is not a regular file"));
+                    }
+                    if s.st_uid != rustix::process::geteuid().as_raw() {
+                        return Err(err("storage object not owned by effective user"));
+                    }
+                    Ok(Some(format!(
+                        "dev:{:x}:ino:{:x}:nlink:{}",
+                        s.st_dev, s.st_ino, s.st_nlink
+                    )))
                 }
             }
         }
@@ -196,18 +222,28 @@ mod linux {
 pub use linux::{Guard, prepare};
 
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub struct Guard { pub path: std::path::PathBuf }
+pub struct Guard {
+    pub path: std::path::PathBuf,
+}
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 pub struct LockGuard;
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl Guard {
-    pub fn lock_initialization(&self) -> Result<LockGuard, StorageError> { Err(StorageError::UnsafeDirectory("unsupported platform")) }
-    pub fn create_database_if_missing(&self) -> Result<bool, StorageError> { Err(StorageError::UnsafeDirectory("unsupported platform")) }
-    pub fn file_identity(&self, _name: &str) -> Result<Option<String>, StorageError> { Err(StorageError::UnsafeDirectory("unsupported platform")) }
+    pub fn lock_initialization(&self) -> Result<LockGuard, StorageError> {
+        Err(StorageError::UnsafeDirectory("unsupported platform"))
+    }
+    pub fn create_database_if_missing(&self) -> Result<bool, StorageError> {
+        Err(StorageError::UnsafeDirectory("unsupported platform"))
+    }
+    pub fn file_identity(&self, _name: &str) -> Result<Option<String>, StorageError> {
+        Err(StorageError::UnsafeDirectory("unsupported platform"))
+    }
 }
 #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 pub fn prepare(_input: &Path, _create: bool) -> Result<Option<Guard>, StorageError> {
-    Err(StorageError::UnsafeDirectory("secure storage is not implemented on this platform; no data was opened"))
+    Err(StorageError::UnsafeDirectory(
+        "secure storage is not implemented on this platform; no data was opened",
+    ))
 }
 // Windows native backend (experimental, Phase 2.1 remediation).
 #[cfg(target_os = "windows")]
