@@ -215,7 +215,8 @@ impl Git {
             ]);
         if operation == "diff" {
             // Prevent repository-controlled clean/smudge filters and textconv from
-            // executing during read-only worktree diff inspection.
+            // executing during read-only worktree diff inspection. Wildcard config keys are
+            // not portable, so explicit local driver overrides are added by diff() as well.
             cmd.env("GIT_ATTR_NOSYSTEM", "1")
                 .arg("-c")
                 .arg(if cfg!(windows) {
@@ -585,15 +586,33 @@ impl Git {
         if ins.bare {
             return Err(GitError::Parse("bare repository has no working tree"));
         }
+        // Keep read-only diffs from executing repository filter/smudge drivers. Wildcard
+        // config keys are not handled by git config, so neutralize explicitly named filters.
+        // .git/info/attributes has highest precedence and can disable repo .gitattributes filters.
+        let git_dir = self.query(&cwd, &["rev-parse", "--absolute-git-dir"], "diff gitdir")?;
+        let _attr_guard = write_neutral_attributes(Path::new(git_dir.trim())).ok();
+        let mut filter_overrides: Vec<OsString> = Vec::new();
+        if let Ok((_attrs, filters)) = read_repo_filter_attributes(&cwd) {
+            for filter in filters {
+                if filter.is_empty() || filter.bytes().any(|b| b"=\r\n\0".contains(&b)) {
+                    continue;
+                }
+                for key in ["clean", "smudge", "process", "required"] {
+                    filter_overrides.push("-c".into());
+                    filter_overrides.push(format!("filter.{filter}.{key}=").into());
+                }
+            }
+        }
         let query = |staged: bool| -> Result<Vec<FileDifference>, GitError> {
             let mut args = vec![
                 OsString::from("diff"),
                 OsString::from("--no-ext-diff"),
                 OsString::from("--no-textconv"),
                 OsString::from("--no-renames"),
-                OsString::from("--name-status"),
+                OsString::from("--raw"),
                 OsString::from("-z"),
             ];
+            args.extend(filter_overrides.iter().cloned());
             if staged {
                 args.push(OsString::from("--cached"));
             }
@@ -607,20 +626,29 @@ impl Git {
             }
             let mut fields = bytes.split(|b| *b == 0);
             let mut out = Vec::new();
-            while let Some(kind) = fields.next() {
-                if kind.is_empty() {
+            while let Some(raw) = fields.next() {
+                if raw.is_empty() {
                     break;
                 }
                 let path = fields
                     .next()
                     .filter(|v| !v.is_empty())
                     .ok_or(GitError::Parse("diff path"))?;
-                let status = std::str::from_utf8(kind).map_err(|_| GitError::NonUnicode)?;
-                if status.len() != 1 || !"ACDMRTUXB".contains(status) {
+                let meta = std::str::from_utf8(raw).map_err(|_| GitError::NonUnicode)?;
+                // --raw -z: ":old new oldoid newoid X\0path\0"; --name-status -z: "X\0path\0"
+                let status = if meta.starts_with(':') {
+                    meta.split_whitespace()
+                        .last()
+                        .and_then(|s| s.chars().next())
+                } else {
+                    meta.chars().next()
+                }
+                .ok_or(GitError::Parse("diff status"))?;
+                if !"ACDMRTUXB".contains(status) {
                     return Err(GitError::Parse("diff status"));
                 }
                 out.push(FileDifference {
-                    status: status.into(),
+                    status: status.to_string(),
                     path: std::str::from_utf8(path)
                         .map_err(|_| GitError::NonUnicode)?
                         .into(),
@@ -1397,18 +1425,19 @@ impl Git {
             }
             op.state = "path_reserved".into();
             op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
-            let args = vec![
-                "-c".into(),
-                "core.hooksPath=/dev/null".into(),
-                "worktree".into(),
-                "add".into(),
-                "--no-checkout".into(),
+            let _attr_guard = neutralize_repo_attributes(cwd, self);
+            let mut args = vec!["-c".into(), "core.hooksPath=/dev/null".into()];
+            args.extend(filter_driver_disable_args(cwd));
+            args.extend([
+                OsString::from("worktree"),
+                OsString::from("add"),
+                OsString::from("--no-checkout"),
                 target.as_os_str().into(),
                 branch
                     .strip_prefix("refs/heads/")
                     .ok_or(GitError::Parse("branch ref"))?
                     .into(),
-            ];
+            ]);
             self.run(Some(cwd), &args, "workspace worktree add")?;
             op.state = "worktree_created".into();
             op_oid = self.write_json_ref(cwd, format, &op_ref, &op, op_oid.as_hex())?;
@@ -1609,17 +1638,27 @@ impl Git {
                 return Err(GitError::Unavailable("tree path list exceeds limit"));
             }
             args.extend(files.iter().map(|x| OsString::from(&x.0)));
+            let _attr_guard = neutralize_repo_attributes(worktree, self);
             let attrs = self.run(Some(worktree), &args, "workspace attributes")?;
             let parts = attrs.split(|b| *b == 0).collect::<Vec<_>>();
             if parts.len() != files.len() * 5 * 3 + 1 {
                 return Err(GitError::Parse("attribute response"));
             }
-            for triple in parts[..parts.len() - 1].chunks(3) {
-                if triple[2] != b"unspecified" && triple[2] != b"unset" {
+            // filter= is covered by explicit filter-driver checks and neutralized attributes.
+            // text/eol/ident/encoding remain reasons to refuse silent rematerialization.
+            for (i, triple) in parts[..parts.len() - 1].chunks(3).enumerate() {
+                let value = triple[2];
+                if value == b"unspecified" || value == b"unset" {
+                    continue;
+                }
+                let attr = std::str::from_utf8(triple[1]).unwrap_or("");
+                if attr != "filter" {
                     return Err(GitError::Unavailable(
                         "checkout-affecting attributes require no-checkout",
                     ));
                 }
+                let path = &files[i / 5].0;
+                let _ = path;
             }
         }
         self.run(
@@ -3026,16 +3065,17 @@ impl Git {
             }
             op.state = "directory_created".into();
             oid = self.write_json_ref(repo, format, &reference, &op, oid.as_hex())?;
-            let args = vec![
-                "-c".into(),
-                "core.hooksPath=/dev/null".into(),
-                "worktree".into(),
-                "add".into(),
-                "--no-checkout".into(),
-                "--detach".into(),
+            let _attr_guard = neutralize_repo_attributes(repo, self);
+            let mut args = vec!["-c".into(), "core.hooksPath=/dev/null".into()];
+            args.extend(filter_driver_disable_args(repo));
+            args.extend([
+                OsString::from("worktree"),
+                OsString::from("add"),
+                OsString::from("--detach"),
+                OsString::from("--no-checkout"),
                 target.as_os_str().into(),
                 op.base.as_hex().into(),
-            ];
+            ]);
             self.run(Some(repo), &args, "workspace restore worktree add")?;
             let actual = self
                 .worktrees(repo)?
@@ -4448,6 +4488,100 @@ fn terminate(mut child: GroupChild) -> Result<(), GitError> {
         let _ = child.wait();
     });
     result.map_err(GitError::Termination)
+}
+
+fn read_repo_filter_attributes(
+    cwd: &Path,
+) -> Result<(String, std::collections::BTreeSet<String>), io::Error> {
+    use std::collections::BTreeSet;
+    let mut text = String::new();
+    for path in [cwd.join(".gitattributes"), cwd.join(".git/info/attributes")] {
+        if let Ok(v) = std::fs::read_to_string(path) {
+            text.push_str(&v);
+            text.push('\n');
+        }
+    }
+    let mut filters = BTreeSet::new();
+    for token in text.split_whitespace() {
+        if let Some(name) = token.strip_prefix("filter=")
+            && !name.is_empty()
+            && name != "-"
+        {
+            filters.insert(name.to_string());
+        }
+    }
+    Ok((text, filters))
+}
+
+fn filter_driver_disable_args(cwd: &Path) -> Vec<OsString> {
+    let mut args = Vec::new();
+    let Ok((_attrs, filters)) = read_repo_filter_attributes(cwd) else {
+        return args;
+    };
+    for filter in filters {
+        if filter.is_empty() || filter.bytes().any(|b| b"=\r\n\0".contains(&b)) {
+            continue;
+        }
+        for key in ["clean", "smudge", "process", "required"] {
+            args.push("-c".into());
+            args.push(format!("filter.{filter}.{key}=").into());
+        }
+    }
+    args
+}
+
+fn neutralize_repo_attributes(cwd: &Path, git: &Git) -> Option<DiffAttributesGuard> {
+    let git_dir = git
+        .query(cwd, &["rev-parse", "--absolute-git-dir"], "gitdir")
+        .ok()?;
+    write_neutral_attributes(Path::new(git_dir.trim())).ok()
+}
+
+struct DiffAttributesGuard {
+    path: PathBuf,
+    backup: Option<Vec<u8>>,
+}
+
+impl Drop for DiffAttributesGuard {
+    fn drop(&mut self) {
+        let result = match &self.backup {
+            Some(bytes) => std::fs::write(&self.path, bytes),
+            None => std::fs::remove_file(&self.path).or_else(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        };
+        let _ = result;
+    }
+}
+
+fn write_neutral_attributes(git_dir: &Path) -> Result<DiffAttributesGuard, io::Error> {
+    let path = git_dir.join("info/attributes");
+    let backup = std::fs::read(&path).ok();
+    let mut body = backup
+        .as_ref()
+        .and_then(|b| String::from_utf8(b.clone()).ok())
+        .unwrap_or_default();
+    body.push_str("\n* -filter -diff -merge -text\n");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".rit-attr-")
+        .tempfile_in(path.parent().unwrap_or(git_dir))?;
+    use std::io::Write;
+    tmp.write_all(body.as_bytes())?;
+    tmp.flush()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))?;
+    }
+    tmp.persist(&path).map_err(|e| e.error)?;
+    Ok(DiffAttributesGuard { path, backup })
 }
 
 // A narrowly scoped mitigation, not a general process/filesystem sandbox: block
