@@ -216,13 +216,13 @@ impl Git {
         if operation == "diff" {
             // Prevent repository-controlled clean/smudge filters and textconv from
             // executing during read-only worktree diff inspection.
-            cmd.env("GIT_ATTR_NOSYSTEM", "1").arg("-c").arg(
-                if cfg!(windows) {
+            cmd.env("GIT_ATTR_NOSYSTEM", "1")
+                .arg("-c")
+                .arg(if cfg!(windows) {
                     "core.attributesFile=NUL"
                 } else {
                     "core.attributesFile=/dev/null"
-                },
-            );
+                });
             if let Some(dir) = cwd
                 && let Ok((_attrs, filters)) = read_repo_filter_attributes(dir)
             {
@@ -235,11 +235,7 @@ impl Git {
                     }
                 }
             }
-            for entry in [
-                "diff.*.textconv=",
-                "diff.*.command=",
-                "diff.*.xfuncname=",
-            ] {
+            for entry in ["diff.*.textconv=", "diff.*.command=", "diff.*.xfuncname="] {
                 cmd.arg("-c").arg(entry);
             }
         }
