@@ -275,12 +275,12 @@ mod other {
                 if m.nlink() > 1 {
                     return Err(StorageError::HardLinkedDatabase);
                 }
-                return Ok(Some(format!(
+                Ok(Some(format!(
                     "dev:{:x}:ino:{:x}:nlink:{}",
                     m.dev(),
                     m.ino(),
                     m.nlink()
-                )));
+                )))
             }
             #[cfg(not(unix))]
             {

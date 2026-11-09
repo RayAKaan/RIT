@@ -735,11 +735,8 @@ fn worktree_inventory_and_tracked_diff_are_read_only() {
     let git = Git::discover(None).unwrap();
     let inventory = git.worktrees(&root).unwrap();
     assert_eq!(inventory.len(), 2);
-    assert!(
-        inventory
-            .iter()
-            .any(|x| x.detached && x.path == w.to_str().unwrap())
-    );
+    let w_path = w.canonicalize().unwrap().to_string_lossy().into_owned();
+    assert!(inventory.iter().any(|x| x.detached && x.path == w_path));
     let diff = git.diff(&root).unwrap();
     assert_eq!(diff.unstaged.len(), 1);
     assert_eq!(diff.unstaged[0].path, "file name");

@@ -190,8 +190,15 @@ impl Git {
         // status executions; keep status on env/config hardening only and preserve
         // seccomp for diff/workspace/conflict operations where filter execution is the
         // main risk surface.
-        let needs_filter =
-            matches!(operation, "diff" | "conflict merge") || operation.starts_with("workspace ");
+        let needs_filter = matches!(
+            operation,
+            "diff" | "conflict merge" | "workspace save" | "workspace apply"
+        ) || operation.starts_with("workspace read")
+            || operation.starts_with("workspace lock")
+            || operation.starts_with("workspace attributes")
+            || operation.starts_with("workspace checkpoint")
+            || operation.starts_with("workspace submission diff")
+            || operation.starts_with("workspace tree");
         let _filter = if needs_filter && cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             match no_child_filter() {
                 Ok(f) => Some(f),

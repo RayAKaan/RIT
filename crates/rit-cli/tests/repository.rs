@@ -313,7 +313,9 @@ fn repurposed_first_location_does_not_hide_valid_linked_worktree() {
     fs::create_dir(&linked).unwrap();
     git(&linked, &["init", "-q"]);
     let info = json(&rit(&data, &["repository", "info", id, "--json"]));
-    assert_eq!(info["inspection"]["location"], root.to_str().unwrap());
+    let loc = info["inspection"]["location"].as_str().unwrap();
+    let expected = root.canonicalize().unwrap().to_string_lossy().into_owned();
+    assert_eq!(loc, expected);
     assert_eq!(info["repository"]["id"], id);
 }
 #[test]
@@ -374,7 +376,10 @@ fn valid_git_environment_override_is_used() {
         .env("XDG_CONFIG_HOME", temp.path().join("config"))
         .output()
         .unwrap();
-    assert_eq!(json(&out)["inspection"]["location"], repo.to_str().unwrap());
+    assert_eq!(
+        json(&out)["inspection"]["location"],
+        repo.canonicalize().unwrap().to_string_lossy()
+    );
 }
 #[test]
 fn rejects_data_directory_which_contains_repository() {
