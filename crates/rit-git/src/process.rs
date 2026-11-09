@@ -185,20 +185,21 @@ impl Git {
         allow_exit_one: bool,
         input: Option<&[u8]>,
     ) -> Result<(Vec<u8>, i32), GitError> {
-        // Worktree diffs and workspace file reads may invoke clean filters. Status
-        // is also restricted, but Linux CI has shown seccomp incompatibility in some
-        // status executions; keep status on env/config hardening only and preserve
-        // seccomp for diff/workspace/conflict operations where filter execution is the
-        // main risk surface.
-        let needs_filter = matches!(
-            operation,
-            "diff" | "conflict merge" | "workspace save" | "workspace apply"
-        ) || operation.starts_with("workspace read")
-            || operation.starts_with("workspace lock")
-            || operation.starts_with("workspace attributes")
-            || operation.starts_with("workspace checkpoint")
-            || operation.starts_with("workspace submission diff")
-            || operation.starts_with("workspace tree");
+        // Linux x86-64: apply no-child seccomp to operations that may touch repo-
+        // controlled filters/config. Status remains env-hardened only because Linux CI
+        // has shown seccomp incompatibility in status executions; checkpoint blob writes
+        // are also exempt. Best-effort when /usr/bin/setpriv is unavailable.
+        let needs_filter = !matches!(operation, "status")
+            && (matches!(
+                operation,
+                "diff" | "conflict merge" | "workspace save" | "workspace apply"
+            ) || operation.starts_with("workspace read")
+                || operation.starts_with("workspace lock")
+                || operation.starts_with("workspace attributes")
+                || (operation.starts_with("workspace checkpoint")
+                    && operation != "workspace checkpoint blob")
+                || operation.starts_with("workspace submission diff")
+                || operation.starts_with("workspace tree"));
         let _filter = if needs_filter && cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             match no_child_filter() {
                 Ok(f) => Some(f),

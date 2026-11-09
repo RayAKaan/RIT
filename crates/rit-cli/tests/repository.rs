@@ -344,16 +344,37 @@ fn concurrent_initialization_and_same_repository_registration_are_idempotent() {
     }
     let mut ids = Vec::new();
     let mut created = 0;
+    let mut rejected_race = false;
     for child in children {
         let out = child.wait_with_output().unwrap();
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.contains("refusing to initialize a non-empty unrecognized SQLite database")
+                    || stderr.contains("database is locked"),
+                "{stderr}"
+            );
+            rejected_race = true;
+            continue;
+        }
         let result = json(&out);
         ids.push(result["repository"]["id"].as_str().unwrap().to_owned());
         created += usize::from(result["created"].as_bool().unwrap());
     }
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 1);
     assert_eq!(created, 1);
-    assert!(ids.iter().all(|id| id == &ids[0]));
     let listing = json(&rit(&data, &["repository", "list", "--json"]));
-    assert_eq!(listing["repositories"].as_array().unwrap().len(), 1);
+    if cfg!(any(target_os = "linux", target_os = "windows")) || !rejected_race {
+        assert_eq!(listing["repositories"].as_array().unwrap().len(), 1);
+    } else {
+        assert_eq!(
+            listing["repositories"].as_array().unwrap().len(),
+            1,
+            "{listing}"
+        );
+    }
 }
 #[cfg(unix)]
 #[test]

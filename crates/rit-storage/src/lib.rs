@@ -376,6 +376,7 @@ impl Registry {
                 Err(e) => Err(e),
             };
             if existing_manifest.is_none() {
+                let _ = directory.file_identity("rit.sqlite3")?;
                 return Err(classified.err().unwrap_or(StorageError::BadSchema));
             }
             classified?;
